@@ -41,6 +41,10 @@ class ProjectionHead(nn.Module):
 
     def __init__(self, input_dim: int = 512, hidden_dim: int = 512, output_dim: int = 128):
         super().__init__()
+        # BatchNorm in the projection head is critical for SimCLR — it forces
+        # cross-sample variance and prevents representation collapse (the
+        # failure mode where the encoder maps every input to the same
+        # constant vector and the contrastive loss sticks at log(2N-1)).
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),

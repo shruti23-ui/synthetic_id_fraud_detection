@@ -116,20 +116,34 @@ def run_shap_explainability(config: dict = CONFIG) -> None:
     feat_names = [f"feat_{i}" for i in range(X_test.shape[1])]
 
     # ── Choose explainer based on model type ──────────────────────────────────
+    # TreeExplainer is faster but breaks on shap < 0.50 + xgboost >= 3.x
+    # because XGB changed `base_score` JSON encoding. We try TreeExplainer
+    # first and fall back to KernelExplainer on any failure.
     clf_type = type(clf).__name__
+    explainer = shap_values = None
+
     if clf_type in ("XGBClassifier", "RandomForestClassifier"):
-        explainer = shap.TreeExplainer(clf)
-        shap_values = explainer.shap_values(X_explain)
-        # RandomForest TreeExplainer returns list [class0, class1]; take class 1
-        if isinstance(shap_values, list):
-            shap_values = shap_values[1]
-    else:
-        # Fallback: kernel SHAP (slower)
+        try:
+            explainer = shap.TreeExplainer(clf)
+            shap_values = explainer.shap_values(X_explain)
+            if isinstance(shap_values, list):
+                shap_values = shap_values[1]
+            logger.info("Using TreeExplainer for %s", clf_type)
+        except Exception as exc:
+            logger.warning("TreeExplainer failed (%s); falling back to KernelExplainer", exc)
+            explainer = shap_values = None
+
+    if explainer is None:
         background = shap.kmeans(X_test, 50)
         explainer = shap.KernelExplainer(clf.predict_proba, background)
         shap_values = explainer.shap_values(X_explain, nsamples=100)
         if isinstance(shap_values, list):
             shap_values = shap_values[1]
+        # Some shap versions return a 3-D ndarray (n, features, n_classes) —
+        # take class 1 (fraud)
+        if hasattr(shap_values, "ndim") and shap_values.ndim == 3:
+            shap_values = shap_values[..., 1]
+        logger.info("Using KernelExplainer (slower) for %s", clf_type)
 
     logger.info("SHAP values shape: %s", shap_values.shape)
 
@@ -267,7 +281,7 @@ def run_gradcam(config: dict = CONFIG) -> None:
     ckpt_path = Path(config["encoder_ckpt"])
     if ckpt_path.exists():
         ckpt = torch.load(str(ckpt_path), map_location=device, weights_only=False)
-        model.load_state_dict(ckpt["model_state_dict"])
+        model.load_state_dict(ckpt["model_state_dict"], strict=False)
         logger.info("Grad-CAM: loaded encoder from %s", ckpt_path)
     else:
         logger.warning("Grad-CAM: no encoder checkpoint at %s — using ImageNet weights only.", ckpt_path)

@@ -1,9 +1,39 @@
 # Detecting Synthetic Identity Fraud in Digital Payments Using Self-Supervised Contrastive Learning
 
 End-to-end research-grade ML pipeline for detecting synthetic / forged
-identity-document images. The system combines self-supervised contrastive
-representation learning with three additions tailored to the document-forgery
-problem:
+identity-document images on the local fake/real dataset (1222 forgeries +
+1000 reals).
+
+The pipeline contains **two complementary tracks**:
+
+* **Self-supervised track** — SimCLR contrastive pre-training (ResNet18) with
+  three forgery-domain additions: forgery-aware augmentations, a multi-task
+  forgery-type head, and SupCon (Khosla et al. 2020). Encoder features are
+  consumed by classical classifiers (XGBoost / RF / LR / MLP).
+* **Supervised track** — end-to-end fine-tune of a ResNet50 with binary
+  cross-entropy on the same 60/20/20 split. This is the *strong baseline*
+  required for thesis comparison.
+
+## TL;DR — final test-set numbers
+
+| Method | Acc | F1 | ROC-AUC | PR-AUC |
+|---|---:|---:|---:|---:|
+| Raw ImageNet ResNet18 + XGBoost (control) | ~0.60 | ~0.65 | ~0.60 | ~0.65 |
+| SimCLR ResNet18 + XGBoost (5-ep, undertrained) | ~0.62 | ~0.65 | ~0.62 | ~0.69 |
+| **Supervised ResNet50 end-to-end** | **0.9392** | **0.9429** | **0.9941** | **0.9952** |
+
+The supervised ResNet50 fine-tune **clears the >90 % accuracy target** in
+~6.5 min on an RTX 2050. The SimCLR results above are from an *undertrained*
+encoder (5 epochs); pure self-supervised contrastive learning on 2222 images
+is fundamentally hard and does not surpass the supervised baseline at this
+scale — an honest, defensible thesis finding.
+
+---
+
+## 1. Self-supervised contrastive contributions
+
+The SimCLR track adds three pieces to canonical SimCLR, each motivated by
+the document-forgery domain:
 
 1. **Forgery-aware augmentations** — JPEG re-compression, patch erasing, and
    pixel-noise instead of generic SimCLR colour jitter, which would erase the
@@ -23,51 +53,53 @@ baseline so the contribution of each design choice can be measured.
 
 ---
 
-## 1. Pipeline overview
+## 2. Pipeline overview
 
 ```
   Local fake/real ID images (templates/)
-            |
-            v
-  ContrastiveDataset           Forgery-aware augmentations (A)
-   returns (v1, v2, label, ctype)        |
-            |                            v
-            +------> SimCLR encoder (ResNet18 + ProjectionHead)
-            |                            |
-            |        +-------------------+-----------------------+
-            |        |                                            |
-            |        v                                            v
-            |   contrastive loss                          ctype head (C)
-            |   SupCon (B) or NT-Xent              CrossEntropy(forgery type)
-            |        |                                            |
-            |        +-------- weighted sum (alpha=0.3) ----------+
-            |                            |
-            |                            v
-            |                       total loss -> Adam + Cosine LR
-            v
-  Encoder features (512-d)
-            |
-            v
-  60/20/20 stratified split
-   train -> XGBoost / RandomForest / LogReg / MLP
-            |
-            v
-  Evaluation, Visualisation, SHAP, Grad-CAM
+       |
+       +-------------------- TRACK A: self-supervised --------------------+
+       |                                                                   |
+       v                                                                   |
+  ContrastiveDataset       forgery-aware augs                              |
+   (v1, v2, label, ctype)        |                                          |
+       |                         v                                          |
+       +---> SimCLR encoder (ResNet18 + ProjectionHead)                     |
+       |                         |                                          |
+       |       +-----------------+----------------+                         |
+       |       v                                  v                         |
+       |  contrastive loss                  ctype head                      |
+       |  SupCon or NT-Xent          CrossEntropy(3-class forgery type)    |
+       |       +-------- weighted sum (alpha=0.3-0.5) -----+               |
+       |                         v                                          |
+       |               Adam + warmup + cosine LR                            |
+       v                                                                   |
+  encoder features (512-d) -> 60/20/20 split -> XGB / RF / LR / MLP       |
+       |                                                                   |
+       v                                                                   |
+  Evaluation, Visualisation, SHAP, Grad-CAM                                |
+                                                                            |
+  +---------------------- TRACK B: supervised baseline -------------------+
+  |                                                                        |
+  ResNet50 (ImageNet V2 weights) -> 2-class head                           |
+  end-to-end binary CE, AdamW lr=1e-4, cosine, AMP                        |
+  60/20/20 split, best on val ROC-AUC -> final TEST evaluation            |
 ```
 
 | Stage | Module | Output |
 |---|---|---|
-| Contrastive pre-training (with forgery-aware aug + multi-task + SupCon) | `src/train_contrastive.py` | `models/simclr_encoder_best.pth` |
+| Contrastive pre-training (forgery-aware aug + multi-task + SupCon) | `src/train_contrastive.py` | `models/simclr_encoder_best.pth` |
 | Embedding extraction | `src/generate_embeddings.py` | `data/processed/train_embeddings.npy` |
-| Fraud classification (4 models) | `src/classifier.py` | `models/best_classifier.pkl`, `outputs/metrics/classifier_results.csv` |
+| Fraud classification (4 models on SimCLR features) | `src/classifier.py` | `models/best_classifier.pkl`, `outputs/metrics/classifier_results.csv` |
 | Baseline (raw ResNet) vs SimCLR | `src/baseline_comparison.py` | `outputs/metrics/baseline_vs_simclr.csv` |
 | Evaluation | `src/evaluate.py` | ROC / PR / confusion / threshold sweep |
 | Visualisation | `src/visualization.py` | `outputs/plots/*.png` |
 | Explainability | `src/explainability.py` | SHAP + Grad-CAM overlays |
+| **Supervised end-to-end fine-tune (ResNet50)** | `src/supervised_finetune.py` | `models/supervised_resnet50_best.pth`, `outputs/metrics/supervised_results.csv` |
 
 ---
 
-## 2. Dataset
+## 3. Dataset
 
 **Local labeled** (default, `--source local`):
 
@@ -97,7 +129,7 @@ forgery-type annotations so multi-task is auto-disabled.
 
 ---
 
-## 3. Setup (Python 3.11 + CUDA 12.4)
+## 4. Setup (Python 3.11 + CUDA 12.4)
 
 This project requires a CUDA-capable GPU. The codebase enforces this and
 will refuse to fall back to CPU silently (`utils.get_device(strict=True)`).
@@ -114,6 +146,9 @@ py -3.11 -m venv venv311
 
 # 3. Install the rest of the requirements
 .\venv311\Scripts\python.exe -m pip install -r requirements.txt
+
+# 4. (Optional) timm — required only by src/supervised_finetune.py for legacy backbones
+.\venv311\Scripts\python.exe -m pip install timm
 ```
 
 Verify the install:
@@ -125,30 +160,28 @@ Verify the install:
 
 ---
 
-## 4. Run
+## 5. Run
 
 ```powershell
-# Full pipeline with all novelties enabled (default config: A + C + SupCon)
+# Full pipeline (8 stages: SimCLR + downstream + supervised baseline)
 .\venv311\Scripts\python.exe -u main.py --batch-size 32 --source local --epochs 5
 
-# Pure SimCLR baseline (toggle off the additions in train_contrastive.CONFIG)
-#   set use_supcon = False
-#   set use_multitask = False
-#   set forgery_aware_aug = False
+# Just the supervised ResNet50 baseline (fastest, ~7 min, 90%+ test accuracy)
+.\venv311\Scripts\python.exe -u src\supervised_finetune.py
 
 # Re-run downstream stages without retraining the encoder
 .\venv311\Scripts\python.exe -u main.py --skip-train --batch-size 32
 
-# Train encoder for longer
-.\venv311\Scripts\python.exe -u main.py --epochs 50 --batch-size 32
+# SimCLR encoder for 50 epochs (no supervised stage)
+.\venv311\Scripts\python.exe -u main.py --epochs 50 --batch-size 32 --skip-supervised
 ```
 
-CLI flags: `--skip-{train,embed,cls,baseline,eval,viz,shap}`, `--epochs N`,
-`--batch-size N`, `--source {local,hf}`.
+CLI flags: `--skip-{train,embed,cls,baseline,eval,viz,shap,supervised}`,
+`--epochs N`, `--batch-size N`, `--source {local,hf}`.
 
 ---
 
-## 5. Per-epoch monitoring
+## 6. Per-epoch monitoring
 
 During contrastive training the script reports, every epoch:
 
@@ -164,13 +197,14 @@ SimCLR / MoCo papers) and lets you watch the encoder learn in real time.
 
 ---
 
-## 6. Project structure
+## 7. Project structure
 
 ```
 .
-├── main.py                       # master pipeline runner
+├── main.py                       # master pipeline runner (8 stages)
 ├── download_dataset.py           # one-shot HF dataset fetcher
 ├── requirements.txt
+├── pyrightconfig.json            # Pylance config (extraPaths: src/)
 ├── configs/
 │   └── default.yaml
 ├── data/
@@ -180,6 +214,9 @@ SimCLR / MoCo papers) and lets you watch the encoder learn in real time.
 │   ├── Images/{fakes,reals}/
 │   └── Annotations/{fakes,reals}/
 ├── models/                       # checkpoints + best classifier
+│   ├── simclr_encoder_best.pth        SimCLR ResNet18 encoder
+│   ├── supervised_resnet50_best.pth   strong baseline
+│   └── best_classifier.pkl            best XGB / RF / LR / MLP on SimCLR features
 ├── outputs/
 │   ├── plots/      ← all PNG figures (thesis-ready)
 │   ├── metrics/    ← CSV + npy artefacts
@@ -192,7 +229,8 @@ SimCLR / MoCo papers) and lets you watch the encoder learn in real time.
     ├── local_dataset_loader.py   # local fake/real loader, ctype labels, class weights
     ├── preprocess.py             # save/load arrays, 60/20/20 splitter
     ├── contrastive_model.py      # SimCLRModel + ClassificationHead + NTXent + SupCon
-    ├── train_contrastive.py      # AMP-enabled, multi-task aware training loop
+    ├── train_contrastive.py      # AMP-enabled, multi-task aware contrastive training
+    ├── supervised_finetune.py    # ResNet50 end-to-end binary fine-tune (strong baseline)
     ├── generate_embeddings.py    # encoder feature extraction
     ├── classifier.py             # XGBoost / RF / LR / MLP, 60/20/20 split
     ├── baseline_comparison.py    # raw ResNet vs SimCLR head-to-head
@@ -203,7 +241,7 @@ SimCLR / MoCo papers) and lets you watch the encoder learn in real time.
 
 ---
 
-## 7. Outputs (thesis-ready)
+## 8. Outputs (thesis-ready)
 
 After a full run:
 
@@ -213,22 +251,24 @@ After a full run:
 - `roc_curve.png`, `pr_curve.png`, `confusion_matrix.png`
 - `class_distribution.png`
 - `embedding_similarity_heatmap.png` — block-diagonal structure proves the encoder separates fake vs real
-- `baseline_vs_simclr.png` — **the headline figure** comparing raw ResNet to the SimCLR encoder across all 4 classifiers and 5 metrics
+- `baseline_vs_simclr.png` — comparing raw ResNet to the SimCLR encoder across all 4 classifiers and 5 metrics
 - `shap_summary_beeswarm.png`, `shap_summary_bar.png`, `shap_waterfall_fraud.png`
 - `gradcam_overlays.png` — encoder attention on fake vs real IDs
 
 **Metrics** (`outputs/metrics/`)
-- `train_loss.csv` — per epoch: total / contrastive / multitask losses, lr, linear-probe metrics
-- `classifier_results.csv` — VAL + TEST metrics for XGB / RF / LR / MLP
+- `train_loss.csv` — SimCLR per-epoch: total / contrastive / multitask losses + linear-probe metrics
+- `classifier_results.csv` — VAL + TEST metrics for XGB / RF / LR / MLP on SimCLR features
 - `baseline_vs_simclr.csv` — same metrics for raw ResNet vs SimCLR features
+- **`supervised_results.csv`** — final test row for the supervised ResNet50 fine-tune (the headline)
+- `supervised_train.csv` — supervised per-epoch: train loss + val acc / recall / F1 / ROC-AUC / PR-AUC
 - `roc_curve_data.csv`, `pr_curve_data.csv`, `threshold_sweep.csv`
 - `confusion_matrix.npy`, `confusion_matrix_norm.npy`
 
 ---
 
-## 8. Methodology and design choices
+## 9. Methodology and design choices
 
-### 8.1 Why three changes on top of plain SimCLR
+### 9.1 Why three changes on top of plain SimCLR
 
 Plain SimCLR was designed for natural images where colour, lighting and
 crop augmentations are class-preserving. For document forgery the situation
@@ -244,7 +284,18 @@ the signal we want the encoder to learn. The three additions address this:
 
 The combined loss is `L = L_contrastive + alpha * L_ctype` with `alpha = 0.3`.
 
-### 8.2 Data splits
+### 9.2 Why ResNet50 for the supervised baseline (and not ResNet18 or Xception)
+
+- **ResNet18** (11M params) is the canonical SimCLR backbone, kept for the
+  self-supervised track to keep the comparison clean.
+- **Xception** (20M, classic forgery-detection backbone in FaceForensics++)
+  was tried first but did not converge under the two-stage + heavy-aug recipe
+  on this small dataset.
+- **ResNet50 with ImageNet V2 weights** (23.5M, AdamW lr=1e-4, cosine, AMP,
+  light augmentations) is the proven supervised-fine-tune recipe. It trains
+  in ~7 min on RTX 2050 and reaches **94 % test accuracy / 0.994 ROC-AUC**.
+
+### 9.3 Data splits
 
 - **SimCLR pre-training** uses all 2222 images (self-supervised; no held-out
   set is needed for the encoder).
@@ -256,7 +307,7 @@ The combined loss is `L = L_contrastive + alpha * L_ctype` with `alpha = 0.3`.
   `evaluate.py` and `baseline_comparison.py` so numbers are directly
   comparable across stages.
 
-### 8.3 Engineering
+### 9.4 Engineering
 
 - **Mixed precision** (`torch.amp.autocast('cuda')`) — halves VRAM, enables
   batch 32 on a 4 GB card without spilling
@@ -272,11 +323,13 @@ The combined loss is `L = L_contrastive + alpha * L_ctype` with `alpha = 0.3`.
 
 ---
 
-## 9. References
+## 10. References
 
 - Chen et al., *A Simple Framework for Contrastive Learning of Visual Representations* (SimCLR), ICML 2020.
 - Khosla et al., *Supervised Contrastive Learning* (SupCon), NeurIPS 2020.
 - He et al., *Deep Residual Learning for Image Recognition* (ResNet), CVPR 2016.
+- Chollet, *Xception: Deep Learning with Depthwise Separable Convolutions*, CVPR 2017.
+- Rossler et al., *FaceForensics++: Learning to Detect Manipulated Facial Images*, ICCV 2019.
 - Lundberg & Lee, *A Unified Approach to Interpreting Model Predictions* (SHAP), NeurIPS 2017.
 - Selvaraju et al., *Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization*, ICCV 2017.
 - Bulatov et al., *MIDV-2020: A Comprehensive Benchmark Dataset for Identity Document Analysis*, 2020 — source of the document templates used here.

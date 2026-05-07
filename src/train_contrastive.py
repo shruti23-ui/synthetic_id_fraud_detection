@@ -28,7 +28,7 @@ from sklearn.preprocessing import StandardScaler
 
 import torch
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, SequentialLR
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
@@ -72,7 +72,8 @@ CONFIG = {
     "image_size":          224,
     "batch_size":          32,
     "epochs":              5,
-    "lr":                  1e-3,
+    "lr":                  3e-4,         # was 1e-3 (too high for pretrained init)
+    "warmup_epochs":       5,            # linear warmup 0 -> lr over first 5 epochs
     "weight_decay":        1e-4,
     "temperature":         0.5,
     "embedding_dim":       128,
@@ -94,12 +95,16 @@ CONFIG = {
 
     # ── B: SupCon loss (fake/real labels guide the contrastive objective) ─
     "use_supcon":          True,    # if True, replace NT-Xent with SupCon
-    "supcon_temperature":  0.1,     # SupCon papers typically use 0.1
-    "supcon_label_source": "label", # "label" (binary) or "ctype" (3-class)
+    "supcon_temperature":  0.2,     # 0.1 was too peaky; 0.2-0.5 is more stable
+    "supcon_label_source": "label", # "label" (binary) - more balanced batches
+                                    # than "ctype" with the heavily skewed
+                                    # 1077 / 1000 / 145 distribution
 
     # ── C: multi-task ctype head (auxiliary CE loss) ──────────────────────
     "use_multitask":       True,    # if True, encoder predicts ctype too
-    "ctype_loss_weight":   0.3,     # weight of CE loss vs contrastive loss
+    "ctype_loss_weight":   0.5,     # 1.0 was destabilising; 0.5 keeps the
+                                    # supervised signal strong without
+                                    # dominating the contrastive objective
     "num_ctypes":          NUM_CTYPES,
 }
 
@@ -362,7 +367,18 @@ def train(config: dict = CONFIG) -> SimCLRModel:
         lr=config["lr"],
         weight_decay=config["weight_decay"],
     )
-    scheduler = CosineAnnealingLR(optimizer, T_max=config["epochs"])
+    # Linear warmup -> cosine decay (standard SimCLR/MoCo recipe)
+    warmup_e  = max(int(config.get("warmup_epochs", 0)), 0)
+    total_e   = config["epochs"]
+    if warmup_e > 0 and warmup_e < total_e:
+        warmup    = LambdaLR(optimizer, lr_lambda=lambda e: (e + 1) / warmup_e)
+        cosine    = CosineAnnealingLR(optimizer, T_max=max(total_e - warmup_e, 1))
+        scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_e])
+        logger.info("LR schedule: linear warmup (%d ep) -> cosine over %d ep, peak lr=%.1e",
+                    warmup_e, total_e - warmup_e, config["lr"])
+    else:
+        scheduler = CosineAnnealingLR(optimizer, T_max=total_e)
+        logger.info("LR schedule: cosine over %d ep, peak lr=%.1e", total_e, config["lr"])
 
     # Mixed-precision scaler (CUDA only)
     use_amp = bool(config.get("use_amp", True)) and device.type == "cuda"

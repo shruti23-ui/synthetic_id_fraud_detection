@@ -78,7 +78,11 @@ _set_style()
 # ---------------------------------------------------------------------------
 
 def plot_loss_curve(metrics_csv: str = "outputs/metrics/train_loss.csv") -> Path:
-    """Plot the contrastive training loss over epochs."""
+    """Plot training-loss components over epochs.
+
+    Supports both the legacy single-`loss` CSV format and the multi-task
+    format with `loss_total`, `loss_contrastive`, `loss_multitask` columns.
+    """
     csv_path = Path(metrics_csv)
     if not csv_path.exists():
         logger.warning("Loss CSV not found at %s — skipping loss curve.", csv_path)
@@ -86,10 +90,25 @@ def plot_loss_curve(metrics_csv: str = "outputs/metrics/train_loss.csv") -> Path
 
     df = pd.read_csv(csv_path)
     fig, ax = plt.subplots(figsize=(9, 5))
-    ax.plot(df["epoch"], df["loss"], color="#1565C0", linewidth=2.5, label="Train Loss")
-    ax.fill_between(df["epoch"], df["loss"], alpha=0.12, color="#1565C0")
+
+    # Detect format and pick columns to plot
+    if "loss_total" in df.columns:
+        ax.plot(df["epoch"], df["loss_total"],       color="#1565C0", linewidth=2.5, label="Total")
+        if "loss_contrastive" in df.columns:
+            ax.plot(df["epoch"], df["loss_contrastive"], color="#43A047", linewidth=1.8, label="Contrastive", linestyle="--")
+        if "loss_multitask" in df.columns and df["loss_multitask"].abs().sum() > 0:
+            ax.plot(df["epoch"], df["loss_multitask"],   color="#E53935", linewidth=1.8, label="Multi-task (ctype)", linestyle=":")
+        ax.fill_between(df["epoch"], df["loss_total"], alpha=0.10, color="#1565C0")
+    elif "loss" in df.columns:
+        ax.plot(df["epoch"], df["loss"], color="#1565C0", linewidth=2.5, label="Train Loss")
+        ax.fill_between(df["epoch"], df["loss"], alpha=0.12, color="#1565C0")
+    else:
+        logger.warning("No loss columns in %s — skipping.", csv_path)
+        plt.close(fig)
+        return None
+
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("NT-Xent Loss")
+    ax.set_ylabel("Loss")
     ax.set_title("SimCLR Contrastive Training Loss")
     ax.legend()
     ax.grid(True, linestyle="--", alpha=0.4)
@@ -113,7 +132,7 @@ def plot_tsne(embeddings: np.ndarray, labels: np.ndarray, n_samples: int = 2000)
         embeddings, labels = embeddings[idx], labels[idx]
 
     logger.info("Running t-SNE on %d samples …", len(embeddings))
-    tsne = TSNE(n_components=2, perplexity=30, random_state=42, n_iter=1000)
+    tsne = TSNE(n_components=2, perplexity=30, random_state=42, max_iter=1000)
     coords = tsne.fit_transform(embeddings)
 
     fig, ax = plt.subplots(figsize=(9, 7))

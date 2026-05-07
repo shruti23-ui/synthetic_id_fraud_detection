@@ -114,7 +114,13 @@ def generate_embeddings(config: dict = CONFIG) -> tuple[np.ndarray, np.ndarray]:
     model_path = Path(config["model_path"])
     if model_path.exists():
         ckpt = torch.load(str(model_path), map_location=device, weights_only=False)
-        model.load_state_dict(ckpt["model_state_dict"])
+        # strict=False so the optional ctype_head from multi-task training
+        # is silently dropped (we only need the encoder + projector here).
+        missing, unexpected = model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        if unexpected:
+            logger.info("Ignoring unexpected keys (multi-task heads): %d", len(unexpected))
+        if missing:
+            logger.warning("Missing keys: %s", missing)
         logger.info("Loaded checkpoint from %s (epoch %s)", model_path, ckpt.get("epoch", "?"))
     else:
         logger.warning(

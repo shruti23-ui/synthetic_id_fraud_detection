@@ -6,20 +6,21 @@ Master pipeline runner for:
      Using Self-Supervised Contrastive Learning"
 
 Executes all stages in order:
-    1. Dataset loading & inspection
-    2. Contrastive pre-training (SimCLR)
-    3. Embedding generation
-    4. Fraud classification
+    1. Contrastive pre-training (SimCLR)
+    2. Embedding generation
+    3. Fraud classification (XGBoost / RandomForest / LR / MLP on embeddings)
+    4. Baseline (raw ResNet) vs SimCLR comparison
     5. Evaluation
     6. Visualisation
-    7. SHAP explainability
+    7. Explainability (SHAP + Grad-CAM)
+    8. Supervised end-to-end fine-tune (ResNet50, the strong baseline)
 
 Usage:
-    python main.py                   # run full pipeline
-    python main.py --skip-train      # skip contrastive training (use existing checkpoint)
-    python main.py --skip-embed      # skip embedding generation
-    python main.py --epochs 10       # override epoch count
-    python main.py --batch-size 32   # override batch size
+    python main.py                       # run full pipeline (incl. supervised stage)
+    python main.py --skip-train          # skip SimCLR pre-training
+    python main.py --skip-supervised     # skip the supervised ResNet50 fine-tune
+    python main.py --epochs 10           # override SimCLR epoch count
+    python main.py --batch-size 32       # override batch size
 """
 
 import argparse
@@ -33,12 +34,14 @@ from pathlib import Path
 Path("outputs").mkdir(parents=True, exist_ok=True)
 
 # ── UTF-8 console (Windows cp1252 default can't render arrows etc.) ────────
+# .reconfigure() exists on TextIOWrapper (the concrete stream class) but isn't
+# declared on the TextIO protocol — hence the type: ignore.
 try:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 except (AttributeError, ValueError):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
 # ── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -65,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-eval",     action="store_true", help="Skip evaluation")
     parser.add_argument("--skip-viz",      action="store_true", help="Skip visualisations")
     parser.add_argument("--skip-shap",     action="store_true", help="Skip SHAP / Grad-CAM explainability")
+    parser.add_argument("--skip-supervised", action="store_true", help="Skip supervised ResNet50 end-to-end fine-tune")
     parser.add_argument("--epochs",      type=int,   default=None, help="Override training epoch count")
     parser.add_argument("--batch-size",  type=int,   default=None, help="Override batch size")
     parser.add_argument("--split",       type=str,   default=None, help="Override HuggingFace split name")
@@ -108,6 +112,7 @@ def main():
     from visualization        import generate_all_plots
     from explainability       import run_explainability, CONFIG as SHAP_CFG
     from baseline_comparison  import run_baseline_comparison, CONFIG as BASELINE_CFG
+    from supervised_finetune  import train_supervised,   CONFIG as SUP_CFG
 
     pipeline_start = time.time()
     logger.info("Synthetic Identity Fraud Detection – Pipeline Starting")
@@ -123,8 +128,9 @@ def main():
     logger.info("Data source: %s", args.source)
 
     # ── Stage 1: Contrastive Pre-training ─────────────────────────────────────
+    # Trained encoder is persisted to disk; downstream stages reload it.
     if not args.skip_train:
-        model = run_stage("Contrastive Pre-training (SimCLR)", train, TRAIN_CFG)
+        run_stage("Contrastive Pre-training (SimCLR)", train, TRAIN_CFG)
     else:
         logger.info("Skipping contrastive training (--skip-train).")
 
@@ -164,18 +170,34 @@ def main():
     else:
         logger.info("Skipping explainability (--skip-shap).")
 
+    # ── Stage 8: Supervised End-to-End Fine-Tune (ResNet50) ───────────────────
+    # The "strong baseline" — directly optimises binary fake/real CE on the
+    # full ResNet50 (vs. the frozen-encoder SimCLR pipeline above). Provides
+    # the headline accuracy number and the contrast with self-supervised.
+    if not args.skip_supervised:
+        if args.batch_size:
+            SUP_CFG["batch_size"] = args.batch_size
+        run_stage("Supervised End-to-End Fine-Tune (ResNet50)", train_supervised, SUP_CFG)
+    else:
+        logger.info("Skipping supervised fine-tune (--skip-supervised).")
+
     # ── Summary ───────────────────────────────────────────────────────────────
     elapsed = time.time() - pipeline_start
     logger.info("=" * 60)
     logger.info("PIPELINE COMPLETE  (total time: %.1f s = %.1f min)", elapsed, elapsed / 60)
     logger.info("=" * 60)
     logger.info("Key outputs:")
-    logger.info("  models/simclr_encoder_best.pth   – trained encoder")
-    logger.info("  data/processed/                  – embeddings + labels")
-    logger.info("  outputs/plots/                   – all figures")
-    logger.info("  outputs/metrics/                 – CSV metrics")
-    logger.info("  models/best_classifier.pkl       – best fraud classifier")
-    logger.info("  outputs/pipeline.log             – full execution log")
+    logger.info("  models/simclr_encoder_best.pth        - SimCLR encoder")
+    logger.info("  models/supervised_resnet50_best.pth   - supervised ResNet50 (strong baseline)")
+    logger.info("  models/best_classifier.pkl            - best XGBoost/RF/LR/MLP on SimCLR features")
+    logger.info("  data/processed/                       - embeddings + labels")
+    logger.info("  outputs/plots/                        - all figures")
+    logger.info("  outputs/metrics/                      - CSV metrics")
+    logger.info("    -> classifier_results.csv           classifier metrics on SimCLR features")
+    logger.info("    -> baseline_vs_simclr.csv           raw ResNet vs SimCLR comparison")
+    logger.info("    -> supervised_results.csv           supervised ResNet50 end-to-end")
+    logger.info("    -> supervised_train.csv             per-epoch supervised training log")
+    logger.info("  outputs/pipeline.log                  - full execution log")
 
 
 if __name__ == "__main__":

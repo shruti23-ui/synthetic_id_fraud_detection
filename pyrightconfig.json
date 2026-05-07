@@ -1,0 +1,18 @@
+{
+  "include": ["src", "main.py", "download_dataset.py"],
+  "extraPaths": ["src"],
+  "venvPath": ".",
+  "venv": "venv311",
+  "pythonVersion": "3.11",
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": "none",
+  "exclude": [
+    "venv",
+    "venv311",
+    "data",
+    "outputs",
+    "models",
+    "templates",
+    "**/__pycache__"
+  ]
+}

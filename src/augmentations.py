@@ -137,7 +137,9 @@ def get_forgery_aware_transform(image_size: int = 224) -> T.Compose:
         T.GaussianBlur(kernel_size=int(0.05 * image_size) | 1, sigma=(0.05, 1.0)),
         T.ToTensor(),
         GaussianPixelNoise(p=0.5, sigma_range=(0.005, 0.02)),
-        T.RandomErasing(p=0.4, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0.0),
+        # Smaller patch erase: scale 1-7% (was 2-15%) and lower probability,
+        # to avoid consistently destroying the small forgery field with the cutout.
+        T.RandomErasing(p=0.25, scale=(0.01, 0.07), ratio=(0.3, 3.3), value=0.0),
         T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     ])
 

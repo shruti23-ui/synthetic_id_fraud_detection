@@ -25,6 +25,9 @@ seaborn>=0.12.0
 plotly>=5.15.0
 umap-learn>=0.5.5
 
+# Optional: extra backbones for src/supervised_finetune.py (XceptionNet, EfficientNet, ConvNeXt, etc.)
+timm>=1.0.0
+
 # UX
 tqdm>=4.65.0
 
