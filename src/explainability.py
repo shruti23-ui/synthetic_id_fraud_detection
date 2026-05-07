@@ -266,7 +266,7 @@ def run_gradcam(config: dict = CONFIG) -> None:
 
     ckpt_path = Path(config["encoder_ckpt"])
     if ckpt_path.exists():
-        ckpt = torch.load(str(ckpt_path), map_location=device)
+        ckpt = torch.load(str(ckpt_path), map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         logger.info("Grad-CAM: loaded encoder from %s", ckpt_path)
     else:

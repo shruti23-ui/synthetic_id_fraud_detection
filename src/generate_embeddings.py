@@ -113,7 +113,7 @@ def generate_embeddings(config: dict = CONFIG) -> tuple[np.ndarray, np.ndarray]:
 
     model_path = Path(config["model_path"])
     if model_path.exists():
-        ckpt = torch.load(str(model_path), map_location=device)
+        ckpt = torch.load(str(model_path), map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         logger.info("Loaded checkpoint from %s (epoch %s)", model_path, ckpt.get("epoch", "?"))
     else:

@@ -33,6 +33,36 @@ _REAL_ANNOTS    = _TEMPLATES_ROOT / "Annotations" / "reals"
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
+# Multi-task forgery-type vocabulary
+# 0 = real (no forgery), 1 = Inpaint_and_Rewrite, 2 = Crop_and_Replace
+CTYPE_VOCAB: dict[str, int] = {
+    "real":                0,
+    "Inpaint_and_Rewrite": 1,
+    "Crop_and_Replace":    2,
+}
+NUM_CTYPES = len(CTYPE_VOCAB)
+
+
+def _ctype_to_int(ctype_str: str) -> int:
+    return CTYPE_VOCAB.get(ctype_str, 0)
+
+
+def compute_ctype_class_weights(records: list[dict]) -> list[float]:
+    """Inverse-frequency class weights for the multi-task ctype head.
+
+    Returned list is in CTYPE_VOCAB integer order (so it can be passed
+    directly to torch.nn.CrossEntropyLoss(weight=...)).
+    """
+    counts = [0] * NUM_CTYPES
+    for r in records:
+        counts[r["ctype_label"]] += 1
+    total = sum(counts)
+    weights = [
+        (total / (NUM_CTYPES * c)) if c > 0 else 1.0
+        for c in counts
+    ]
+    return weights
+
 # Disk-based pre-resize cache: avoids Python-process memory pressure
 # (the in-memory cache caused libomp/numpy segfaults on Python 3.13 + Windows).
 _RESIZED_ROOT = Path("data/processed/templates_256")
@@ -104,10 +134,14 @@ def _build_records(fake_dir: Path, real_dir: Path) -> list[dict]:
         for img_path in sorted(fake_dir.iterdir()):
             if img_path.suffix.lower() in _IMAGE_EXTS:
                 annot = _load_fake_annotation(img_path.stem)
+                ctype = annot.get("ctype", "Inpaint_and_Rewrite")  # default for unparseable
                 records.append({
-                    "path":       img_path,
-                    "label":      1,
-                    "annotation": annot,
+                    "path":        img_path,
+                    "label":       1,
+                    "ctype":       ctype,
+                    "ctype_label": _ctype_to_int(ctype),
+                    "field":       annot.get("field", "unknown"),
+                    "annotation":  annot,
                 })
         logger.info("Loaded %d fake images from %s", sum(r["label"] == 1 for r in records), fake_dir)
     else:
@@ -119,9 +153,12 @@ def _build_records(fake_dir: Path, real_dir: Path) -> list[dict]:
         for img_path in sorted(real_dir.iterdir()):
             if img_path.suffix.lower() in _IMAGE_EXTS:
                 records.append({
-                    "path":       img_path,
-                    "label":      0,
-                    "annotation": {},
+                    "path":        img_path,
+                    "label":       0,
+                    "ctype":       "real",
+                    "ctype_label": _ctype_to_int("real"),
+                    "field":       "none",
+                    "annotation":  {},
                 })
         real_count = len(records) - real_count_before
         logger.info("Loaded %d real images from %s", real_count, real_dir)
@@ -204,9 +241,10 @@ class LocalContrastiveDataset(Dataset):
         rec   = self.records[idx]
         img   = _pil_load(rec)
         label = rec["label"]
+        ctype = rec["ctype_label"]
         view1 = self.transform(img) if self.transform else img
         view2 = self.transform(img) if self.transform else img
-        return view1, view2, label
+        return view1, view2, label, ctype
 
 
 # ---------------------------------------------------------------------------

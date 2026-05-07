@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 # IMPORTANT: sklearn must be imported before torch to avoid libomp DLL crash
-# on Windows + Python 3.13 (sklearn-pulled libomp conflicts with torch's).
+# on Windows when both pull conflicting OpenMP runtimes.
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, recall_score, f1_score, roc_auc_score, precision_score
@@ -36,9 +36,20 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dataset_loader import load_hf_dataset, get_contrastive_loader
-from local_dataset_loader import get_local_contrastive_loader, get_local_embedding_loader
-from augmentations import get_contrastive_transform, get_eval_transform
-from contrastive_model import SimCLRModel, NTXentLoss
+from local_dataset_loader import (
+    get_local_contrastive_loader,
+    get_local_embedding_loader,
+    LocalContrastiveDataset,
+    LocalEmbeddingDataset,
+    NUM_CTYPES,
+    compute_ctype_class_weights,
+)
+from augmentations import (
+    get_contrastive_transform,
+    get_forgery_aware_transform,
+    get_eval_transform,
+)
+from contrastive_model import SimCLRModel, NTXentLoss, SupConLoss
 from utils import seed_everything, get_device, count_parameters, EarlyStopping
 
 # ---------------------------------------------------------------------------
@@ -59,24 +70,37 @@ logger = logging.getLogger(__name__)
 
 CONFIG = {
     "image_size":          224,
-    "batch_size":          32,         # tuned for 4 GB VRAM
-    "epochs":              5,          # quick-test default; override via CLI
+    "batch_size":          32,
+    "epochs":              5,
     "lr":                  1e-3,
     "weight_decay":        1e-4,
     "temperature":         0.5,
     "embedding_dim":       128,
     "pretrained":          True,
-    "num_workers":         0,          # Windows: 0 is safest; cache makes it fast anyway
+    "num_workers":         0,
     "checkpoint_dir":      "models",
     "metrics_dir":         "outputs/metrics",
     "save_every":          5,
     "data_source":         "local",
-    "use_amp":             True,        # mixed-precision (cuts VRAM ~½, faster)
+    "use_amp":             True,
     "early_stop_patience": 8,
     "seed":                42,
-    "linear_probe":        True,        # evaluate linear probe accuracy each epoch
+    "linear_probe":        True,
     "probe_test_size":     0.2,
-    "probe_max_samples":   500,         # cap probe set size for speed (sampled stratified)
+    "probe_max_samples":   500,
+
+    # ── A: forgery-aware augmentations ────────────────────────────────────
+    "forgery_aware_aug":   True,    # uses get_forgery_aware_transform when True
+
+    # ── B: SupCon loss (fake/real labels guide the contrastive objective) ─
+    "use_supcon":          True,    # if True, replace NT-Xent with SupCon
+    "supcon_temperature":  0.1,     # SupCon papers typically use 0.1
+    "supcon_label_source": "label", # "label" (binary) or "ctype" (3-class)
+
+    # ── C: multi-task ctype head (auxiliary CE loss) ──────────────────────
+    "use_multitask":       True,    # if True, encoder predicts ctype too
+    "ctype_loss_weight":   0.3,     # weight of CE loss vs contrastive loss
+    "num_ctypes":          NUM_CTYPES,
 }
 
 
@@ -84,40 +108,81 @@ CONFIG = {
 # Training helpers
 # ---------------------------------------------------------------------------
 
-def train_one_epoch(model, loader, loss_fn, optimizer, device, scaler=None) -> float:
-    """Run one epoch of contrastive training and return mean loss.
+def train_one_epoch(
+    model,
+    loader,
+    contrastive_fn,
+    optimizer,
+    device,
+    scaler=None,
+    *,
+    use_supcon: bool = False,
+    supcon_label_source: str = "label",
+    use_multitask: bool = False,
+    ctype_loss_fn=None,
+    ctype_loss_weight: float = 0.0,
+) -> dict:
+    """Run one epoch and return mean loss components.
 
-    If `scaler` is provided, uses torch.cuda.amp mixed-precision.
+    Returns dict with keys: total, contrastive, multitask (if enabled).
     """
     model.train()
-    total_loss = 0.0
-    n_batches  = 0
+    n_batches = 0
+    sum_total = 0.0
+    sum_contr = 0.0
+    sum_mt    = 0.0
 
-    for view1, view2, _ in tqdm(loader, desc="  batch", leave=False):
+    for view1, view2, label, ctype in tqdm(loader, desc="  batch", leave=False):
         view1 = view1.to(device, non_blocking=True)
         view2 = view2.to(device, non_blocking=True)
+        label = label.to(device, non_blocking=True)
+        ctype = ctype.to(device, non_blocking=True)
+        sup_labels = ctype if supcon_label_source == "ctype" else label
 
         optimizer.zero_grad(set_to_none=True)
 
-        if scaler is not None:
-            with torch.cuda.amp.autocast():
+        def compute():
+            if use_multitask:
+                _, z_i, ctype_logits_i = model.forward_multitask(view1)
+                _, z_j, ctype_logits_j = model.forward_multitask(view2)
+            else:
                 _, z_i = model(view1)
                 _, z_j = model(view2)
-                loss = loss_fn(z_i, z_j)
-            scaler.scale(loss).backward()
+                ctype_logits_i = ctype_logits_j = None
+
+            l_contr = contrastive_fn(z_i, z_j, sup_labels) if use_supcon \
+                      else contrastive_fn(z_i, z_j)
+
+            l_mt = torch.zeros((), device=device)
+            if use_multitask and ctype_loss_fn is not None:
+                l_mt = 0.5 * (ctype_loss_fn(ctype_logits_i, ctype) +
+                              ctype_loss_fn(ctype_logits_j, ctype))
+
+            l_total = l_contr + ctype_loss_weight * l_mt
+            return l_total, l_contr, l_mt
+
+        if scaler is not None:
+            with torch.amp.autocast(device_type="cuda"):
+                l_total, l_contr, l_mt = compute()
+            scaler.scale(l_total).backward()
             scaler.step(optimizer)
             scaler.update()
         else:
-            _, z_i = model(view1)
-            _, z_j = model(view2)
-            loss = loss_fn(z_i, z_j)
-            loss.backward()
+            l_total, l_contr, l_mt = compute()
+            l_total.backward()
             optimizer.step()
 
-        total_loss += loss.item()
-        n_batches  += 1
+        sum_total += l_total.item()
+        sum_contr += l_contr.item()
+        sum_mt    += l_mt.item()
+        n_batches += 1
 
-    return total_loss / max(n_batches, 1)
+    n = max(n_batches, 1)
+    return {
+        "total":       sum_total / n,
+        "contrastive": sum_contr / n,
+        "multitask":   sum_mt    / n,
+    }
 
 
 @torch.no_grad()
@@ -198,18 +263,25 @@ def train(config: dict = CONFIG) -> SimCLRModel:
     device = get_device()
 
     # ── Data ─────────────────────────────────────────────────────────────────
-    transform = get_contrastive_transform(image_size=config["image_size"])
     use_local = config.get("data_source", "local") == "local"
+    use_forgery_aug = bool(config.get("forgery_aware_aug", True)) and use_local
+
+    if use_forgery_aug:
+        transform = get_forgery_aware_transform(image_size=config["image_size"])
+        logger.info("Augmentation: forgery-aware (JPEG re-compress, patch erase, mild color)")
+    else:
+        transform = get_contrastive_transform(image_size=config["image_size"])
+        logger.info("Augmentation: generic SimCLR (heavy color jitter, grayscale)")
 
     if use_local:
-        logger.info("Loading local fake/real dataset (templates/) …")
+        logger.info("Loading local fake/real dataset (templates/) ...")
         loader = get_local_contrastive_loader(
             transform=transform,
             batch_size=config["batch_size"],
             num_workers=config["num_workers"],
         )
     else:
-        logger.info("Loading HuggingFace dataset …")
+        logger.info("Loading HuggingFace dataset ...")
         raw = load_hf_dataset()
         split_name = "train" if "train" in raw else list(raw.keys())[0]
         logger.info("Using split: %s  (%d samples)", split_name, len(raw[split_name]))
@@ -220,7 +292,7 @@ def train(config: dict = CONFIG) -> SimCLRModel:
             num_workers=config["num_workers"],
         )
 
-    logger.info("DataLoader ready: %d batches × batch_size %d", len(loader), config["batch_size"])
+    logger.info("DataLoader ready: %d batches x batch_size %d", len(loader), config["batch_size"])
 
     # ── Probe loader (single-view, deterministic) for per-epoch monitoring ────
     probe_loader = None
@@ -253,15 +325,37 @@ def train(config: dict = CONFIG) -> SimCLRModel:
         logger.info("Linear probe enabled - per-epoch acc / recall / f1 / ROC-AUC will be reported.")
 
     # ── Model, Loss, Optimiser ───────────────────────────────────────────────
+    use_multitask = bool(config.get("use_multitask", False)) and use_local
+    use_supcon    = bool(config.get("use_supcon",    False)) and use_local
+
     model = SimCLRModel(
         embedding_dim=config["embedding_dim"],
         pretrained=config["pretrained"],
+        num_ctypes=int(config["num_ctypes"]) if use_multitask else 0,
     ).to(device)
 
     trainable, total = count_parameters(model)
-    logger.info("Model params — trainable: %s / total: %s", f"{trainable:,}", f"{total:,}")
+    logger.info("Model params - trainable: %s / total: %s", f"{trainable:,}", f"{total:,}")
 
-    loss_fn = NTXentLoss(temperature=config["temperature"])
+    if use_supcon:
+        contrastive_fn = SupConLoss(temperature=config.get("supcon_temperature", 0.1))
+        logger.info("Contrastive loss: SupCon (label_source=%s, T=%.2f)",
+                    config.get("supcon_label_source", "label"),
+                    config.get("supcon_temperature", 0.1))
+    else:
+        contrastive_fn = NTXentLoss(temperature=config["temperature"])
+        logger.info("Contrastive loss: NT-Xent (T=%.2f)", config["temperature"])
+
+    ctype_loss_fn = None
+    if use_multitask:
+        # Inverse-frequency class weights computed once from the loader's records
+        weights = compute_ctype_class_weights(loader.dataset.records)
+        weight_t = torch.tensor(weights, dtype=torch.float32, device=device)
+        ctype_loss_fn = torch.nn.CrossEntropyLoss(weight=weight_t)
+        logger.info(
+            "Multi-task ctype head enabled (weights=%s, alpha=%.2f)",
+            [round(w, 3) for w in weights], config["ctype_loss_weight"],
+        )
 
     optimizer = optim.Adam(
         model.parameters(),
@@ -272,14 +366,14 @@ def train(config: dict = CONFIG) -> SimCLRModel:
 
     # Mixed-precision scaler (CUDA only)
     use_amp = bool(config.get("use_amp", True)) and device.type == "cuda"
-    amp_scaler = torch.cuda.amp.GradScaler() if use_amp else None
+    amp_scaler = torch.amp.GradScaler(device="cuda") if use_amp else None
     logger.info("Mixed precision (AMP): %s", "enabled" if use_amp else "disabled")
 
     early_stop = EarlyStopping(patience=config.get("early_stop_patience", 8), mode="min")
 
     # ── Metrics log ──────────────────────────────────────────────────────────
     metrics_path = Path(config["metrics_dir"]) / "train_loss.csv"
-    header = ["epoch", "loss", "lr", "elapsed_s"]
+    header = ["epoch", "loss_total", "loss_contrastive", "loss_multitask", "lr", "elapsed_s"]
     if do_probe:
         header += ["probe_accuracy", "probe_precision", "probe_recall", "probe_f1", "probe_roc_auc"]
     with open(metrics_path, "w", newline="") as f:
@@ -293,15 +387,26 @@ def train(config: dict = CONFIG) -> SimCLRModel:
     t0 = time.time()
 
     for epoch in range(1, config["epochs"] + 1):
-        epoch_loss = train_one_epoch(model, loader, loss_fn, optimizer, device, scaler=amp_scaler)
+        losses = train_one_epoch(
+            model, loader, contrastive_fn, optimizer, device,
+            scaler=amp_scaler,
+            use_supcon=use_supcon,
+            supcon_label_source=config.get("supcon_label_source", "label"),
+            use_multitask=use_multitask,
+            ctype_loss_fn=ctype_loss_fn,
+            ctype_loss_weight=float(config.get("ctype_loss_weight", 0.0)) if use_multitask else 0.0,
+        )
+        epoch_loss = losses["total"]
         scheduler.step()
 
         current_lr = scheduler.get_last_lr()[0]
         elapsed = time.time() - t0
 
         logger.info(
-            "Epoch [%3d/%d]  loss=%.4f  lr=%.2e  elapsed=%.0fs",
-            epoch, config["epochs"], epoch_loss, current_lr, elapsed,
+            "Epoch [%3d/%d]  total=%.4f  contrastive=%.4f  multitask=%.4f  lr=%.2e  elapsed=%.0fs",
+            epoch, config["epochs"],
+            losses["total"], losses["contrastive"], losses["multitask"],
+            current_lr, elapsed,
         )
 
         # ── Linear probe monitoring (acc / recall / f1 / ROC-AUC) ───────────
@@ -321,7 +426,14 @@ def train(config: dict = CONFIG) -> SimCLRModel:
             )
 
         # Append to CSV
-        row = [epoch, round(epoch_loss, 6), round(current_lr, 8), round(elapsed, 1)]
+        row = [
+            epoch,
+            round(losses["total"],       6),
+            round(losses["contrastive"], 6),
+            round(losses["multitask"],   6),
+            round(current_lr, 8),
+            round(elapsed, 1),
+        ]
         if do_probe:
             row += [
                 round(probe_metrics.get("accuracy",  0.0), 4),
@@ -352,7 +464,7 @@ def train(config: dict = CONFIG) -> SimCLRModel:
     logger.info("Best model saved at: %s", best_model_path)
 
     # Load best weights before returning
-    ckpt = torch.load(best_model_path, map_location=device)
+    ckpt = torch.load(str(best_model_path), map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
 
     return model
