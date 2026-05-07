@@ -1,0 +1,38 @@
+# ===================================================================
+# Default configuration — Synthetic Identity Fraud Detection
+# Bachelor thesis pipeline (SimCLR + downstream classification)
+# ===================================================================
+
+seed: 42
+data_source: local           # "local" (templates/) or "hf" (HuggingFace)
+
+# --- Image / data --------------------------------------------------
+image_size: 224
+batch_size: 32               # tuned for 4 GB VRAM (RTX 2050)
+num_workers: 0               # set to 4+ on Linux/macOS
+
+# --- SimCLR contrastive training -----------------------------------
+contrastive:
+  epochs: 5                  # quick test setting; bump to 50+ for final
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  temperature: 0.5
+  embedding_dim: 128
+  pretrained: true
+  use_amp: true              # mixed-precision (saves VRAM, faster)
+  early_stop_patience: 8
+  save_every: 5
+
+# --- Downstream fraud classification -------------------------------
+classifier:
+  test_size: 0.2
+  random_state: 42
+
+# --- Evaluation / reporting ----------------------------------------
+evaluation:
+  threshold_grid: [0.30, 0.40, 0.50, 0.60, 0.70]
+
+# --- SHAP explainability -------------------------------------------
+shap:
+  n_samples: 200
+  n_features_show: 20

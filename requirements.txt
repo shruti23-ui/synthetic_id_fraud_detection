@@ -1,0 +1,32 @@
+# Pinned for Python 3.11 + CUDA 12.4 + Windows
+# (Install torch separately via:
+#   pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+# )
+
+# Core scientific stack — keep numpy <2 for shap/umap/sklearn Windows wheel compatibility
+numpy<2
+scipy>=1.11.0
+pandas>=2.0.0
+
+# ML / DL
+scikit-learn>=1.3.0
+xgboost>=2.0.0
+shap>=0.44.0
+
+# Data / dataset I/O
+datasets>=2.14.0
+transformers>=4.35.0
+Pillow>=10.0.0
+opencv-python>=4.8.0
+
+# Visualisation
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.15.0
+umap-learn>=0.5.5
+
+# UX
+tqdm>=4.65.0
+
+# Optional: YAML config support
+PyYAML>=6.0
