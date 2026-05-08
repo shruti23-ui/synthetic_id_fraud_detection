@@ -143,7 +143,10 @@ class SupervisedResNet50(nn.Module):
         weights = models.ResNet50_Weights.IMAGENET1K_V2  # the better V2 weights
         backbone = models.resnet50(weights=weights)
         in_features = backbone.fc.in_features            # 2048
-        backbone.fc = nn.Sequential(
+        # Reassign the FC head with a Dropout+Linear pair. Runtime accepts
+        # any nn.Module here, but torchvision's type stubs declare fc as a
+        # plain nn.Linear, so we silence the Pylance assignment warning.
+        backbone.fc = nn.Sequential(  # type: ignore[assignment]
             nn.Dropout(dropout),
             nn.Linear(in_features, num_classes),
         )
