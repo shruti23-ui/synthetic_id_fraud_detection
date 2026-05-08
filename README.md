@@ -1,32 +1,43 @@
-# Detecting Synthetic Identity Fraud in Digital Payments Using Self-Supervised Contrastive Learning
+# Detecting Synthetic Identity Fraud with a Two-Stream RGB+FFT Network
 
 End-to-end research-grade ML pipeline for detecting synthetic / forged
 identity-document images on the local fake/real dataset (1222 forgeries +
 1000 reals).
 
-The pipeline contains **two complementary tracks**:
+The pipeline contains **three tracks** that culminate in a novel architecture:
 
 * **Self-supervised track** — SimCLR contrastive pre-training (ResNet18) with
   three forgery-domain additions: forgery-aware augmentations, a multi-task
   forgery-type head, and SupCon (Khosla et al. 2020). Encoder features are
   consumed by classical classifiers (XGBoost / RF / LR / MLP).
-* **Supervised track** — end-to-end fine-tune of a ResNet50 with binary
-  cross-entropy on the same 60/20/20 split. This is the *strong baseline*
-  required for thesis comparison.
+* **Supervised baseline track** — end-to-end fine-tune of a ResNet50 with
+  binary cross-entropy. The single-stream baseline.
+* **Headline architecture (this work)** — **Two-Stream RGB + FFT network with
+  per-branch Transformer fusion**: parallel ResNet50 (RGB) and ResNet18
+  (log-magnitude FFT) backbones, each followed by a 2-layer Transformer
+  encoder over the 7×7 spatial token grid, fused at the CLS-token level.
+  Trained on a **template-aware** 60/20/20 split that eliminates the data
+  leakage we discovered in the original image-level split.
 
-## TL;DR — final test-set numbers
+## TL;DR — final test-set numbers (template-aware 60/20/20 split)
 
-| Method | Acc | F1 | ROC-AUC | PR-AUC |
-|---|---:|---:|---:|---:|
-| Raw ImageNet ResNet18 + XGBoost (control) | ~0.60 | ~0.65 | ~0.60 | ~0.65 |
-| SimCLR ResNet18 + XGBoost (5-ep, undertrained) | ~0.62 | ~0.65 | ~0.62 | ~0.69 |
-| **Supervised ResNet50 end-to-end** | **0.9392** | **0.9429** | **0.9941** | **0.9952** |
+| Method | Acc | F1 | Recall | ROC-AUC | PR-AUC |
+|---|---:|---:|---:|---:|---:|
+| Raw ImageNet ResNet18 + LogReg (control) | 0.726 | 0.747 | 0.735 | 0.759 | 0.759 |
+| SimCLR ResNet18 + LogReg (5-ep, undertrained) | 0.647 | 0.675 | 0.665 | 0.694 | 0.688 |
+| Supervised ResNet50 end-to-end (single-stream) | 0.964 | 0.967 | 0.936 | 0.998 | 0.999 |
+| **Two-Stream RGB+FFT + Transformer (headline)** | **0.989** | **0.990** | **0.992** | **0.998** | **0.999** |
 
-The supervised ResNet50 fine-tune **clears the >90 % accuracy target** in
-~6.5 min on an RTX 2050. The SimCLR results above are from an *undertrained*
-encoder (5 epochs); pure self-supervised contrastive learning on 2222 images
-is fundamentally hard and does not surpass the supervised baseline at this
-scale — an honest, defensible thesis finding.
+The Two-Stream model **misses only 2 of 248 test forgeries** (99.19 %
+recall) versus 16 missed by the ResNet50 baseline (93.55 % recall) —
+a 5.6 % absolute recall gain at the same near-saturated ROC-AUC. For a
+fraud-detection deployment, the recall delta is what matters.
+
+> The original `RESULTS.md` headline of 0.9941 ROC-AUC was computed on an
+> *image-level* split that contained massive data leakage (65 % source-
+> template overlap, 99 % near-duplicate rate). That number is *not* a
+> measurement of generalisation; the leakage analysis and recovery are
+> documented in `RESEARCH_REPORT.md`.
 
 ---
 
@@ -88,14 +99,23 @@ baseline so the contribution of each design choice can be measured.
 
 | Stage | Module | Output |
 |---|---|---|
-| Contrastive pre-training (forgery-aware aug + multi-task + SupCon) | `src/train_contrastive.py` | `models/simclr_encoder_best.pth` |
-| Embedding extraction | `src/generate_embeddings.py` | `data/processed/train_embeddings.npy` |
-| Fraud classification (4 models on SimCLR features) | `src/classifier.py` | `models/best_classifier.pkl`, `outputs/metrics/classifier_results.csv` |
-| Baseline (raw ResNet) vs SimCLR | `src/baseline_comparison.py` | `outputs/metrics/baseline_vs_simclr.csv` |
-| Evaluation | `src/evaluate.py` | ROC / PR / confusion / threshold sweep |
-| Visualisation | `src/visualization.py` | `outputs/plots/*.png` |
-| Explainability | `src/explainability.py` | SHAP + Grad-CAM overlays |
-| **Supervised end-to-end fine-tune (ResNet50)** | `src/supervised_finetune.py` | `models/supervised_resnet50_best.pth`, `outputs/metrics/supervised_results.csv` |
+| 1. Contrastive pre-training (forgery-aware aug + multi-task + SupCon) | `src/train_contrastive.py` | `models/simclr_encoder_best.pth` |
+| 2. Embedding extraction | `src/generate_embeddings.py` | `data/processed/train_embeddings.npy` |
+| 3. Fraud classification (4 models on SimCLR features) | `src/classifier.py` | `models/best_classifier.pkl`, `outputs/metrics/classifier_results.csv` |
+| 4. Baseline (raw ResNet) vs SimCLR | `src/baseline_comparison.py` | `outputs/metrics/baseline_vs_simclr.csv` |
+| 5. Evaluation | `src/evaluate.py` | ROC / PR / confusion / threshold sweep |
+| 6. Visualisation | `src/visualization.py` | `outputs/plots/*.png` |
+| 7. Explainability | `src/explainability.py` | SHAP + Grad-CAM overlays |
+| 8. Supervised ResNet50 (single-stream baseline) | `src/supervised_finetune.py` | `models/supervised_resnet50_best.pth` |
+| **9. Two-Stream RGB+FFT + Transformer (headline)** | `src/two_stream_model.py` + `src/train_two_stream.py` | `models/two_stream_best.pth`, `research_outputs/08_two_stream_test_metrics.csv` |
+
+### Standalone research suite
+
+Beyond the 9 main-pipeline stages, the `research/` directory contains 8
+diagnostic scripts (data-leakage audit, template-aware retrain, calibration,
+failure analysis, robustness sweep, embedding geometry, architecture sweep,
+two-stream training) that produce the publication-grade analysis in
+`RESEARCH_REPORT.md`.
 
 ---
 
@@ -163,20 +183,28 @@ Verify the install:
 ## 5. Run
 
 ```powershell
-# Full pipeline (8 stages: SimCLR + downstream + supervised baseline)
+# Full 9-stage pipeline (SimCLR + downstream + supervised + two-stream)
 .\venv311\Scripts\python.exe -u main.py --batch-size 32 --source local --epochs 5
 
-# Just the supervised ResNet50 baseline (fastest, ~7 min, 90%+ test accuracy)
+# Just the headline Two-Stream model (~8 min, 99% recall, 0.998 ROC-AUC)
+.\venv311\Scripts\python.exe -u src\train_two_stream.py
+
+# Just the single-stream ResNet50 baseline
 .\venv311\Scripts\python.exe -u src\supervised_finetune.py
 
-# Re-run downstream stages without retraining the encoder
-.\venv311\Scripts\python.exe -u main.py --skip-train --batch-size 32
+# Skip everything before the two new model stages
+.\venv311\Scripts\python.exe -u main.py `
+    --skip-train --skip-embed --skip-cls --skip-baseline `
+    --skip-eval --skip-viz --skip-shap
 
-# SimCLR encoder for 50 epochs (no supervised stage)
-.\venv311\Scripts\python.exe -u main.py --epochs 50 --batch-size 32 --skip-supervised
+# Standalone research suite (audits + diagnostics + arch sweep)
+.\venv311\Scripts\python.exe -u research\01_data_leakage_audit.py
+.\venv311\Scripts\python.exe -u research\02_template_split_retrain.py
+.\venv311\Scripts\python.exe -u research\03_calibration_analysis.py
+# ...etc through 07
 ```
 
-CLI flags: `--skip-{train,embed,cls,baseline,eval,viz,shap,supervised}`,
+CLI flags: `--skip-{train,embed,cls,baseline,eval,viz,shap,supervised,twostream}`,
 `--epochs N`, `--batch-size N`, `--source {local,hf}`.
 
 ---
@@ -230,13 +258,28 @@ SimCLR / MoCo papers) and lets you watch the encoder learn in real time.
     ├── preprocess.py             # save/load arrays, 60/20/20 splitter
     ├── contrastive_model.py      # SimCLRModel + ClassificationHead + NTXent + SupCon
     ├── train_contrastive.py      # AMP-enabled, multi-task aware contrastive training
-    ├── supervised_finetune.py    # ResNet50 end-to-end binary fine-tune (strong baseline)
+    ├── supervised_finetune.py    # ResNet50 end-to-end binary fine-tune (single-stream baseline)
+    ├── two_stream_model.py       # TwoStreamForgeryNet (RGB + FFT + Transformer) -- HEADLINE
+    ├── train_two_stream.py       # training driver for the two-stream model
     ├── generate_embeddings.py    # encoder feature extraction
     ├── classifier.py             # XGBoost / RF / LR / MLP, 60/20/20 split
     ├── baseline_comparison.py    # raw ResNet vs SimCLR head-to-head
     ├── evaluate.py               # ROC / PR / confusion / threshold sweep
     ├── visualization.py          # 10 thesis-quality plots
     └── explainability.py         # SHAP (beeswarm/bar/waterfall) + Grad-CAM
+
+research/                          # standalone diagnostic scripts (publication-grade)
+├── 01_data_leakage_audit.py       # template overlap + pHash near-duplicate audit
+├── 02_template_split_retrain.py   # clean retrain on template-aware split
+├── 03_calibration_analysis.py     # ECE, Brier, reliability diagrams
+├── 04_failure_analysis.py         # worst FP/FN with Grad-CAM overlays
+├── 05_robustness_sweep.py         # 9 corruptions × 5 severities × 2 ckpts
+├── 06_embedding_geometry.py       # silhouette, DB, CH, cluster purity, t-SNE/UMAP/PCA
+├── 07_architecture_sweep.py       # ResNet50 / ConvNeXt-T / EfficientNetV2-S / ViT-S / Swin-T
+└── 08_two_stream_train.py         # standalone wrapper for src/train_two_stream
+
+research_outputs/                  # ~50 artefacts: JSON metrics, CSVs, PNG figures
+RESEARCH_REPORT.md                 # IEEE-reviewer-style honest analysis
 ```
 
 ---

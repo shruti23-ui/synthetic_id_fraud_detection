@@ -13,12 +13,14 @@ Executes all stages in order:
     5. Evaluation
     6. Visualisation
     7. Explainability (SHAP + Grad-CAM)
-    8. Supervised end-to-end fine-tune (ResNet50, the strong baseline)
+    8. Supervised end-to-end fine-tune (ResNet50 single-stream baseline)
+    9. Two-Stream RGB+FFT + Transformer fusion (the headline model)
 
 Usage:
-    python main.py                       # run full pipeline (incl. supervised stage)
+    python main.py                       # run full pipeline (all 9 stages)
     python main.py --skip-train          # skip SimCLR pre-training
     python main.py --skip-supervised     # skip the supervised ResNet50 fine-tune
+    python main.py --skip-twostream      # skip the Two-Stream RGB+FFT model
     python main.py --epochs 10           # override SimCLR epoch count
     python main.py --batch-size 32       # override batch size
 """
@@ -69,6 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-viz",      action="store_true", help="Skip visualisations")
     parser.add_argument("--skip-shap",     action="store_true", help="Skip SHAP / Grad-CAM explainability")
     parser.add_argument("--skip-supervised", action="store_true", help="Skip supervised ResNet50 end-to-end fine-tune")
+    parser.add_argument("--skip-twostream",  action="store_true", help="Skip Two-Stream RGB+FFT model (the headline)")
     parser.add_argument("--epochs",      type=int,   default=None, help="Override training epoch count")
     parser.add_argument("--batch-size",  type=int,   default=None, help="Override batch size")
     parser.add_argument("--split",       type=str,   default=None, help="Override HuggingFace split name")
@@ -113,6 +116,7 @@ def main():
     from explainability       import run_explainability, CONFIG as SHAP_CFG
     from baseline_comparison  import run_baseline_comparison, CONFIG as BASELINE_CFG
     from supervised_finetune  import train_supervised,   CONFIG as SUP_CFG
+    from train_two_stream     import train_two_stream,   CONFIG as TS_CFG
 
     pipeline_start = time.time()
     logger.info("Synthetic Identity Fraud Detection – Pipeline Starting")
@@ -171,15 +175,30 @@ def main():
         logger.info("Skipping explainability (--skip-shap).")
 
     # ── Stage 8: Supervised End-to-End Fine-Tune (ResNet50) ───────────────────
-    # The "strong baseline" — directly optimises binary fake/real CE on the
-    # full ResNet50 (vs. the frozen-encoder SimCLR pipeline above). Provides
-    # the headline accuracy number and the contrast with self-supervised.
+    # The single-stream supervised baseline — used in the thesis comparison
+    # against the Two-Stream RGB+FFT model. Image-level 60/20/20 split
+    # (so the leakage-audit numbers match RESULTS.md).
     if not args.skip_supervised:
         if args.batch_size:
             SUP_CFG["batch_size"] = args.batch_size
-        run_stage("Supervised End-to-End Fine-Tune (ResNet50)", train_supervised, SUP_CFG)
+        run_stage("Supervised End-to-End Fine-Tune (ResNet50, single-stream)",
+                  train_supervised, SUP_CFG)
     else:
         logger.info("Skipping supervised fine-tune (--skip-supervised).")
+
+    # ── Stage 9: Two-Stream RGB+FFT with Transformer fusion (HEADLINE) ────────
+    # The thesis's novel architecture. Trained on the *template-aware*
+    # 60/20/20 split (no template appears across splits), so the resulting
+    # numbers are clean of the data-leakage that inflated stage 8's image-
+    # level baseline. This is the model RESEARCH_REPORT.md uses as the
+    # final answer to "what generalises on this dataset".
+    if not args.skip_twostream:
+        if args.batch_size:
+            TS_CFG["batch_size"] = args.batch_size
+        run_stage("Two-Stream RGB+FFT + Transformer (template-aware split)",
+                  train_two_stream, TS_CFG)
+    else:
+        logger.info("Skipping two-stream model (--skip-twostream).")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     elapsed = time.time() - pipeline_start
@@ -188,15 +207,17 @@ def main():
     logger.info("=" * 60)
     logger.info("Key outputs:")
     logger.info("  models/simclr_encoder_best.pth        - SimCLR encoder")
-    logger.info("  models/supervised_resnet50_best.pth   - supervised ResNet50 (strong baseline)")
+    logger.info("  models/supervised_resnet50_best.pth   - supervised ResNet50 (single-stream)")
+    logger.info("  models/two_stream_best.pth            - HEADLINE: Two-Stream RGB+FFT + Transformer")
     logger.info("  models/best_classifier.pkl            - best XGBoost/RF/LR/MLP on SimCLR features")
     logger.info("  data/processed/                       - embeddings + labels")
-    logger.info("  outputs/plots/                        - all figures")
-    logger.info("  outputs/metrics/                      - CSV metrics")
-    logger.info("    -> classifier_results.csv           classifier metrics on SimCLR features")
-    logger.info("    -> baseline_vs_simclr.csv           raw ResNet vs SimCLR comparison")
-    logger.info("    -> supervised_results.csv           supervised ResNet50 end-to-end")
-    logger.info("    -> supervised_train.csv             per-epoch supervised training log")
+    logger.info("  outputs/plots/                        - all SimCLR-pipeline figures")
+    logger.info("  outputs/metrics/                      - CSV metrics for the SimCLR pipeline")
+    logger.info("  research_outputs/                     - thesis-grade artefacts:")
+    logger.info("    -> 02_template_test_metrics.csv     ResNet50 on clean (template-aware) split")
+    logger.info("    -> 08_two_stream_test_metrics.csv   Two-Stream RGB+FFT (the headline)")
+    logger.info("    -> 08_two_stream_vs_resnet50.png    head-to-head comparison plot")
+    logger.info("  RESEARCH_REPORT.md                    - publication-grade IEEE-style report")
     logger.info("  outputs/pipeline.log                  - full execution log")
 
 
