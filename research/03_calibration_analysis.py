@@ -53,10 +53,7 @@ from supervised_finetune import (  # noqa: E402
 )
 from utils import get_device  # noqa: E402
 
-import importlib.util as _ilu  # noqa: E402
-_spec = _ilu.spec_from_file_location("tmpl_retrain", ROOT / "research" / "02_template_split_retrain.py")
-_t = _ilu.module_from_spec(_spec)  # type: ignore[arg-type]
-_spec.loader.exec_module(_t)        # type: ignore[union-attr]
+from template_split import template_aware_split  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s",
                     datefmt="%H:%M:%S")
@@ -135,7 +132,7 @@ def build_clean_test_loader() -> Optional[DataLoader]:
     eval_ds = LocalEmbeddingDataset(transform=eval_tf)
     cfg = dict(LEAKY_CFG); cfg["val_size"] = 0.20; cfg["test_size"] = 0.20
     try:
-        _, _, test_idx = _t.template_aware_split(eval_ds.records, cfg)
+        _, _, test_idx = template_aware_split(eval_ds.records, cfg)
     except Exception as exc:
         logger.warning("Could not build clean split: %s", exc)
         return None

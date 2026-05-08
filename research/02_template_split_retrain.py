@@ -60,16 +60,8 @@ from supervised_finetune import (  # noqa: E402
     get_simple_train_transform,
     get_simple_eval_transform,
 )
+from template_split import template_aware_split, template_id  # noqa: E402, F401
 from utils import EarlyStopping, count_parameters, get_device, seed_everything  # noqa: E402
-
-# Reuse the exact template_id() logic from the audit script
-import importlib.util as _ilu  # noqa: E402
-_audit_spec = _ilu.spec_from_file_location(
-    "leakage_audit", ROOT / "research" / "01_data_leakage_audit.py"
-)
-_audit = _ilu.module_from_spec(_audit_spec)  # type: ignore[arg-type]
-_audit_spec.loader.exec_module(_audit)        # type: ignore[union-attr]
-template_id = _audit.template_id
 
 logging.basicConfig(
     level=logging.INFO,
@@ -89,11 +81,11 @@ CONFIG = {
     "batch_size":          32,
     "num_workers":         0,
     "seed":                42,
-    "epochs":              15,
+    "epochs":              20,            # cosine LR needs the full schedule
     "lr":                  1e-4,
     "weight_decay":        1e-4,
     "use_amp":             True,
-    "early_stop_patience": 6,
+    "early_stop_patience": 0,             # opt-in; default off so cosine fully decays
     "best_path":           str(MODELS / "supervised_resnet50_clean_best.pth"),
     # Template-aware split: 60/20/20 of TEMPLATES, not images
     "val_size":            0.20,
@@ -102,49 +94,9 @@ CONFIG = {
 
 
 # ---------------------------------------------------------------------------
-# Template-aware split
+# Template-aware split is now provided by src/template_split.py.
+# (Imported above as `template_aware_split`.)
 # ---------------------------------------------------------------------------
-
-def template_aware_split(records: list[dict], cfg: dict) -> tuple[list[int], list[int], list[int]]:
-    """Group all images by their source template, then assign whole groups
-    to train / val / test. This GUARANTEES no template appears across splits.
-    """
-    # Bucket records by template id
-    tpl_to_idx: dict[str, list[int]] = {}
-    for i, r in enumerate(records):
-        tid = template_id(r)
-        tpl_to_idx.setdefault(tid, []).append(i)
-
-    template_ids = sorted(tpl_to_idx.keys())
-    rng = np.random.default_rng(cfg["seed"])
-    rng.shuffle(template_ids)
-
-    # Try to balance class proportions per split, not just template count.
-    # We do a greedy assignment: walk shuffled templates, place each into the
-    # split that currently has the fewest records (capped by target sizes).
-    n_total = sum(len(v) for v in tpl_to_idx.values())
-    target_test  = int(round(n_total * cfg["test_size"]))
-    target_val   = int(round(n_total * cfg["val_size"]))
-    target_train = n_total - target_test - target_val
-
-    splits: dict[str, list[int]] = {"train": [], "val": [], "test": []}
-    targets = {"train": target_train, "val": target_val, "test": target_test}
-
-    for tid in template_ids:
-        # Place into the split that is most under its target
-        deficits = {k: targets[k] - len(splits[k]) for k in splits}
-        chosen = max(deficits, key=lambda k: deficits[k])
-        splits[chosen].extend(tpl_to_idx[tid])
-
-    # Verify: zero template overlap
-    train_tpl = {template_id(records[i]) for i in splits["train"]}
-    val_tpl   = {template_id(records[i]) for i in splits["val"]}
-    test_tpl  = {template_id(records[i]) for i in splits["test"]}
-    assert not (train_tpl & val_tpl), "leak between train and val"
-    assert not (train_tpl & test_tpl), "leak between train and test"
-    assert not (val_tpl   & test_tpl), "leak between val and test"
-
-    return splits["train"], splits["val"], splits["test"]
 
 
 # ---------------------------------------------------------------------------

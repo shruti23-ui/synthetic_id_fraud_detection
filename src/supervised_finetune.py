@@ -82,16 +82,22 @@ CONFIG = {
     "seed":                42,
 
     # Single-stage end-to-end fine-tune
-    "epochs":              15,
+    "epochs":              20,           # bumped from 15: cosine LR needs the
+                                         # full schedule to reach its minimum
     "lr":                  1e-4,         # proven sweet spot for ResNet fine-tune
     "weight_decay":        1e-4,
 
-    # 60 / 20 / 20 stratified split (matches classifier.py)
+    # 60 / 20 / 20 stratified split — uses template-aware splitter
+    # (src/template_split.py) to avoid the leakage documented in
+    # research/01_data_leakage_audit.py.
     "val_size":            0.20,
     "test_size":           0.20,
 
     "use_amp":             True,
-    "early_stop_patience": 6,            # patience on val ROC-AUC
+    # Early stopping disabled by default — it interferes with the cosine LR
+    # schedule (training stops before the LR has finished annealing). Set
+    # to a finite int > 0 to re-enable.
+    "early_stop_patience": 0,
 
     # Outputs
     "checkpoint_dir":      "models",
@@ -157,7 +163,15 @@ class SupervisedResNet50(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Data loaders (same 60 / 20 / 20 stratified split as classifier.py)
+# Data loaders (template-aware 60 / 20 / 20 split)
+#
+# Switched from image-level stratified split to template-aware split in
+# response to the leakage finding in research/01_data_leakage_audit.py:
+# the image-level split had 65 % source-template overlap and a 99 %
+# perceptual near-duplicate rate, which inflated apparent generalisation
+# scores. The template-aware splitter (src/template_split.py) groups all
+# images by source template and assigns whole groups to a single split,
+# guaranteeing zero template overlap.
 # ---------------------------------------------------------------------------
 
 def make_loaders(config: dict) -> tuple[DataLoader, DataLoader, DataLoader, np.ndarray]:
@@ -167,24 +181,12 @@ def make_loaders(config: dict) -> tuple[DataLoader, DataLoader, DataLoader, np.n
     train_ds = LocalEmbeddingDataset(transform=train_tf)
     eval_ds  = LocalEmbeddingDataset(transform=eval_tf)
 
+    from template_split import template_aware_split
+    train_idx, val_idx, test_idx = template_aware_split(train_ds.records, config)
     labels = np.array([r["label"] for r in train_ds.records])
 
-    rng = np.random.default_rng(config["seed"])
-    train_idx, val_idx, test_idx = [], [], []
-    for cls in (0, 1):
-        cls_idx = np.where(labels == cls)[0]
-        rng.shuffle(cls_idx)
-        n = len(cls_idx)
-        n_test = int(round(n * config["test_size"]))
-        n_val  = int(round(n * config["val_size"]))
-        test_idx.extend(cls_idx[:n_test].tolist())
-        val_idx.extend(cls_idx[n_test:n_test + n_val].tolist())
-        train_idx.extend(cls_idx[n_test + n_val:].tolist())
-
-    train_idx, val_idx, test_idx = sorted(train_idx), sorted(val_idx), sorted(test_idx)
-
     logger.info(
-        "Stratified 60/20/20: train=%d  val=%d  test=%d",
+        "Template-aware 60/20/20: train=%d  val=%d  test=%d",
         len(train_idx), len(val_idx), len(test_idx),
     )
     for name, idx in [("train", train_idx), ("val", val_idx), ("test", test_idx)]:
@@ -303,9 +305,15 @@ def train_supervised(config: dict = CONFIG) -> dict:
     scaler = GradScaler(device="cuda") if use_amp else None
     logger.info("Mixed precision (AMP): %s", "enabled" if use_amp else "disabled")
 
-    optimizer = optim.AdamW(model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"])
+    # Standard AdamW recipe: weight decay applied to weight matrices,
+    # but NOT to BatchNorm/LayerNorm gammas-betas or to biases.
+    from utils import make_param_groups
+    optimizer = optim.AdamW(
+        make_param_groups(model, weight_decay=config["weight_decay"]),
+        lr=config["lr"],
+    )
     scheduler = CosineAnnealingLR(optimizer, T_max=config["epochs"])
-    logger.info("Optimiser: AdamW lr=%.1e weight_decay=%.1e | cosine over %d epochs",
+    logger.info("Optimiser: AdamW lr=%.1e wd=%.1e (BN/LN/biases excluded) | cosine over %d epochs",
                 config["lr"], config["weight_decay"], config["epochs"])
 
     metrics_csv = Path(config["metrics_dir"]) / "supervised_train.csv"
@@ -318,7 +326,12 @@ def train_supervised(config: dict = CONFIG) -> dict:
 
     best_val_auc = -1.0
     best_path = Path(config["best_path"])
-    early_stop = EarlyStopping(patience=config["early_stop_patience"], mode="max")
+    # Early stopping is opt-in; default disabled (patience=0) so the cosine
+    # schedule always runs to its minimum LR.
+    early_stop = (
+        EarlyStopping(patience=config["early_stop_patience"], mode="max")
+        if config.get("early_stop_patience", 0) > 0 else None
+    )
     t0 = time.time()
 
     logger.info("=" * 60)
@@ -357,7 +370,7 @@ def train_supervised(config: dict = CONFIG) -> dict:
             )
             logger.info("  -> new best val ROC-AUC %.4f saved", best_val_auc)
 
-        if early_stop.step(val_m["roc_auc"]):
+        if early_stop is not None and early_stop.step(val_m["roc_auc"]):
             logger.info("Early stopping at epoch %d (no val improvement for %d epochs)",
                         ep, config["early_stop_patience"])
             break

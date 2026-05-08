@@ -18,7 +18,6 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -105,6 +104,37 @@ def count_parameters(model: torch.nn.Module) -> tuple[int, int]:
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total     = sum(p.numel() for p in model.parameters())
     return trainable, total
+
+
+def make_param_groups(
+    model: torch.nn.Module,
+    weight_decay: float = 1e-4,
+) -> list[dict]:
+    """Standard transformer / fine-tune parameter grouping for AdamW.
+
+    Excludes BatchNorm / LayerNorm parameters and biases from weight decay.
+    This is the canonical recipe (see e.g. PyTorch image-models, MMCV,
+    HuggingFace) and consistently yields a small but reliable improvement
+    over uniformly-decayed AdamW on transformer-bearing models.
+
+    Returns a list suitable for ``torch.optim.AdamW(model.parameters(), ...)``::
+
+        opt = AdamW(make_param_groups(model, weight_decay=1e-4), lr=1e-4)
+    """
+    decay, no_decay = [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        is_norm = (
+            p.ndim == 1                      # BN/LN gamma & beta are 1-D
+            or name.endswith(".bias")        # any explicit .bias
+            or "norm" in name.lower()        # any LayerNorm/BatchNorm/GroupNorm
+        )
+        (no_decay if is_norm else decay).append(p)
+    return [
+        {"params": decay,    "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -122,11 +122,18 @@ def main():
     logger.info("Synthetic Identity Fraud Detection – Pipeline Starting")
 
     # ── Apply CLI overrides ───────────────────────────────────────────────────
+    # --epochs N applies UNIFORMLY to every training stage (1, 8, 9). If a
+    # stage benefits from a different epoch count, edit its CONFIG dict
+    # directly (e.g. src/train_two_stream.py:CONFIG).
     if args.epochs:
         TRAIN_CFG["epochs"] = args.epochs
+        SUP_CFG["epochs"]   = args.epochs
+        TS_CFG["epochs"]    = args.epochs
     if args.batch_size:
         TRAIN_CFG["batch_size"] = args.batch_size
         EMBED_CFG["batch_size"] = args.batch_size
+        SUP_CFG["batch_size"]   = args.batch_size
+        TS_CFG["batch_size"]    = args.batch_size
     TRAIN_CFG["data_source"] = args.source
     EMBED_CFG["data_source"] = args.source
     logger.info("Data source: %s", args.source)
@@ -179,8 +186,6 @@ def main():
     # against the Two-Stream RGB+FFT model. Image-level 60/20/20 split
     # (so the leakage-audit numbers match RESULTS.md).
     if not args.skip_supervised:
-        if args.batch_size:
-            SUP_CFG["batch_size"] = args.batch_size
         run_stage("Supervised End-to-End Fine-Tune (ResNet50, single-stream)",
                   train_supervised, SUP_CFG)
     else:
@@ -193,8 +198,6 @@ def main():
     # level baseline. This is the model RESEARCH_REPORT.md uses as the
     # final answer to "what generalises on this dataset".
     if not args.skip_twostream:
-        if args.batch_size:
-            TS_CFG["batch_size"] = args.batch_size
         run_stage("Two-Stream RGB+FFT + Transformer (template-aware split)",
                   train_two_stream, TS_CFG)
     else:

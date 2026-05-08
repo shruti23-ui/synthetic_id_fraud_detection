@@ -62,16 +62,15 @@ from supervised_finetune import (  # noqa: E402
     get_simple_eval_transform,
     get_simple_train_transform,
 )
+from template_split import template_aware_split  # noqa: E402
 from two_stream_model import TwoStreamForgeryNet  # noqa: E402
-from utils import EarlyStopping, count_parameters, get_device, seed_everything  # noqa: E402
-
-# Reuse the template-aware splitter from the research module
-import importlib.util as _ilu  # noqa: E402
-_t_spec = _ilu.spec_from_file_location(
-    "tmpl_split", ROOT / "research" / "02_template_split_retrain.py"
+from utils import (  # noqa: E402
+    EarlyStopping,
+    count_parameters,
+    get_device,
+    make_param_groups,
+    seed_everything,
 )
-_t = _ilu.module_from_spec(_t_spec)  # type: ignore[arg-type]
-_t_spec.loader.exec_module(_t)  # type: ignore[union-attr]
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +80,14 @@ CONFIG = {
     "batch_size":          16,
     "num_workers":         0,
     "seed":                42,
-    "epochs":              15,
+    "epochs":              20,            # bumped from 15: previous best ckpt
+                                          # landed at epoch 14/15, i.e. cosine
+                                          # LR had not finished annealing
     "lr":                  1e-4,
     "weight_decay":        1e-4,
     "use_amp":             True,
-    "early_stop_patience": 6,
+    # Early stopping disabled (patience=0); cosine LR runs to completion.
+    "early_stop_patience": 0,
     "best_path":           str(ROOT / "models" / "two_stream_best.pth"),
     "val_size":            0.20,
     "test_size":           0.20,
@@ -107,9 +109,7 @@ def make_loaders(cfg: dict):
     train_ds = LocalEmbeddingDataset(transform=train_tf)
     eval_ds  = LocalEmbeddingDataset(transform=eval_tf)
 
-    splitter_cfg = dict(cfg)
-    splitter_cfg["seed"] = cfg["seed"]
-    train_idx, val_idx, test_idx = _t.template_aware_split(train_ds.records, splitter_cfg)
+    train_idx, val_idx, test_idx = template_aware_split(train_ds.records, cfg)
     labels = np.array([r["label"] for r in train_ds.records])
 
     summary = {}
@@ -273,10 +273,18 @@ def train_two_stream(config: dict = CONFIG) -> dict:
 
     use_amp = bool(config["use_amp"]) and device.type == "cuda"
     scaler = GradScaler(device="cuda") if use_amp else None
-    optimizer = optim.AdamW(model.parameters(), lr=config["lr"],
-                            weight_decay=config["weight_decay"])
+    # Standard AdamW recipe: weight decay applied to weight matrices but NOT
+    # to BatchNorm/LayerNorm gammas-betas or to biases.
+    optimizer = optim.AdamW(
+        make_param_groups(model, weight_decay=config["weight_decay"]),
+        lr=config["lr"],
+    )
     scheduler = CosineAnnealingLR(optimizer, T_max=config["epochs"])
-    early_stop = EarlyStopping(patience=config["early_stop_patience"], mode="max")
+    # Early stopping is opt-in; default disabled so cosine LR fully decays.
+    early_stop = (
+        EarlyStopping(patience=config["early_stop_patience"], mode="max")
+        if config.get("early_stop_patience", 0) > 0 else None
+    )
 
     csv_path = out_dir / "08_two_stream_train.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -327,7 +335,7 @@ def train_two_stream(config: dict = CONFIG) -> dict:
             )
             logger.info("  -> new best val ROC-AUC %.4f saved", best_val_auc)
 
-        if early_stop.step(val_m["roc_auc"]):
+        if early_stop is not None and early_stop.step(val_m["roc_auc"]):
             logger.info("Early stopping at epoch %d", ep)
             break
 

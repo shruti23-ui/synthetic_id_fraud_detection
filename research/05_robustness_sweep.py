@@ -60,10 +60,7 @@ from supervised_finetune import (  # noqa: E402
 )
 from utils import get_device  # noqa: E402
 
-import importlib.util as _ilu  # noqa: E402
-_t_spec = _ilu.spec_from_file_location("tmpl", ROOT / "research" / "02_template_split_retrain.py")
-_t = _ilu.module_from_spec(_t_spec)  # type: ignore[arg-type]
-_t_spec.loader.exec_module(_t)  # type: ignore[union-attr]
+from template_split import template_aware_split  # noqa: E402
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -320,7 +317,7 @@ def get_clean_loader_setup():
     eval_tf = get_simple_eval_transform(LEAKY_CFG["image_size"])
     base_ds = LocalEmbeddingDataset(transform=eval_tf)
     cfg = dict(LEAKY_CFG); cfg["val_size"] = 0.20; cfg["test_size"] = 0.20
-    _, _, test_idx = _t.template_aware_split(base_ds.records, cfg)
+    _, _, test_idx = template_aware_split(base_ds.records, cfg)
     test_idx = sorted(test_idx)
     baseline_loader = DataLoader(
         Subset(base_ds, test_idx), batch_size=LEAKY_CFG["batch_size"], shuffle=False,

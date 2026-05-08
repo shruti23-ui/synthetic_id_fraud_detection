@@ -51,13 +51,13 @@ from supervised_finetune import (  # noqa: E402
 )
 from utils import get_device  # noqa: E402
 
-import importlib.util as _ilu  # noqa: E402
-_audit = _ilu.module_from_spec(_ilu.spec_from_file_location(
-    "audit", ROOT / "research" / "01_data_leakage_audit.py"))  # type: ignore[arg-type]
-_ilu.spec_from_file_location("audit", ROOT / "research" / "01_data_leakage_audit.py").loader.exec_module(_audit)  # type: ignore
-_t_spec = _ilu.spec_from_file_location("tmpl", ROOT / "research" / "02_template_split_retrain.py")
-_t = _ilu.module_from_spec(_t_spec)  # type: ignore[arg-type]
-_t_spec.loader.exec_module(_t)  # type: ignore[union-attr]
+from template_split import template_aware_split, template_id  # noqa: E402
+
+# Backwards-compat shim for the old `_audit.template_id` reference still
+# used elsewhere in this module.
+class _AuditShim:
+    template_id = staticmethod(template_id)
+_audit = _AuditShim()
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -296,7 +296,7 @@ def get_leaky_loader_and_indices():
 def get_clean_loader_and_indices():
     eval_ds = LocalEmbeddingDataset(transform=get_simple_eval_transform(LEAKY_CFG["image_size"]))
     cfg = dict(LEAKY_CFG); cfg["val_size"] = 0.20; cfg["test_size"] = 0.20
-    _, _, test_idx = _t.template_aware_split(eval_ds.records, cfg)
+    _, _, test_idx = template_aware_split(eval_ds.records, cfg)
     test_idx = sorted(test_idx)
     from torch.utils.data import DataLoader, Subset
     test_loader = DataLoader(
