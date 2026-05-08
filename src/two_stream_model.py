@@ -135,8 +135,32 @@ class TransformerBranch(nn.Module):
         return x[:, 0]                            # CLS token: (B, embed_dim)
 
 
+class AvgPoolBranch(nn.Module):
+    """Drop-in replacement for TransformerBranch that uses global avg-pool.
+
+    Used for ablation studies (`use_transformer=False`) — keeps the rest
+    of the architecture identical so the only change is the spatial
+    aggregation step.
+    """
+
+    def __init__(self, in_channels: int, embed_dim: int):
+        super().__init__()
+        self.proj = nn.Conv2d(in_channels, embed_dim, kernel_size=1)
+        self.norm = nn.LayerNorm(embed_dim)
+
+    def forward(self, fmap: torch.Tensor) -> torch.Tensor:
+        x = self.proj(fmap)
+        x = x.mean(dim=(2, 3))    # global average over the 7×7 grid
+        return self.norm(x)
+
+
 class TwoStreamForgeryNet(nn.Module):
-    """RGB + FFT two-stream model with per-branch transformer fusion."""
+    """RGB + FFT two-stream model with per-branch transformer fusion.
+
+    If ``use_transformer=False`` the per-branch transformer encoder is
+    replaced by global average pooling — used to ablate the contribution
+    of the transformer head while keeping every other component fixed.
+    """
 
     def __init__(
         self,
@@ -145,32 +169,35 @@ class TwoStreamForgeryNet(nn.Module):
         num_heads: int = 4,
         num_transformer_layers: int = 2,
         dropout: float = 0.2,
+        use_transformer: bool = True,
     ):
         super().__init__()
+        self.use_transformer = use_transformer
 
         # ── RGB BRANCH ─────────────────────────────────────────────────
         rgb_back = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
         self.rgb_features = _strip_classifier(rgb_back)         # (B, 2048, 7, 7)
-        self.rgb_branch = TransformerBranch(
-            in_channels=2048, embed_dim=embed_dim,
-            num_heads=num_heads, num_layers=num_transformer_layers,
-            spatial=7, dropout=dropout * 0.5,
-        )
+        if use_transformer:
+            self.rgb_branch = TransformerBranch(
+                in_channels=2048, embed_dim=embed_dim,
+                num_heads=num_heads, num_layers=num_transformer_layers,
+                spatial=7, dropout=dropout * 0.5,
+            )
+        else:
+            self.rgb_branch = AvgPoolBranch(in_channels=2048, embed_dim=embed_dim)
 
         # ── FFT BRANCH ─────────────────────────────────────────────────
-        # ResNet18 because the frequency-domain image is simpler.
-        # ImageNet weights are still a useful init even though the input
-        # distribution is different — bn1 will adapt during fine-tuning.
         fft_back = models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
         self.fft_features = _strip_classifier(fft_back)          # (B, 512, 7, 7)
-        # Normalise the FFT input distribution before the backbone sees it.
-        # An input BN learns per-channel mean/std for log-magnitude FFT.
         self.fft_input_norm = nn.BatchNorm2d(3)
-        self.fft_branch = TransformerBranch(
-            in_channels=512, embed_dim=embed_dim,
-            num_heads=num_heads, num_layers=num_transformer_layers,
-            spatial=7, dropout=dropout * 0.5,
-        )
+        if use_transformer:
+            self.fft_branch = TransformerBranch(
+                in_channels=512, embed_dim=embed_dim,
+                num_heads=num_heads, num_layers=num_transformer_layers,
+                spatial=7, dropout=dropout * 0.5,
+            )
+        else:
+            self.fft_branch = AvgPoolBranch(in_channels=512, embed_dim=embed_dim)
 
         # ── FUSION HEAD ────────────────────────────────────────────────
         self.classifier = nn.Sequential(

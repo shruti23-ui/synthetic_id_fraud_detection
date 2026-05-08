@@ -1,0 +1,4 @@
+model,accuracy,precision,recall,f1,roc_auc,pr_auc,n_wrong,n_fn
+A. RGB only (ResNet50),0.9707,1.0,0.9476,0.9731,0.9983,0.9987,13,13
+B. RGB+FFT (avg-pool fusion),0.9819,1.0,0.9677,0.9836,1.0,1.0,8,8
+C. RGB+FFT + Transformer,0.9865,1.0,0.9758,0.9878,0.999,0.9993,6,6

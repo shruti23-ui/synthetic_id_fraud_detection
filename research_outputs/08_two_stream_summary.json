@@ -1,21 +1,22 @@
 {
   "config": {
     "image_size": 224,
-    "batch_size": 16,
+    "batch_size": 32,
     "num_workers": 0,
     "seed": 42,
-    "epochs": 15,
+    "epochs": 20,
     "lr": 0.0001,
     "weight_decay": 0.0001,
     "use_amp": true,
-    "early_stop_patience": 6,
+    "early_stop_patience": 0,
     "best_path": "C:\\Users\\hp\\OneDrive\\Desktop\\Synthetic Fraud Detection\\models\\two_stream_best.pth",
     "val_size": 0.2,
     "test_size": 0.2,
     "embed_dim": 256,
     "num_heads": 4,
     "num_transformer_layers": 2,
-    "dropout": 0.2
+    "dropout": 0.2,
+    "out_dir": "C:\\Users\\hp\\OneDrive\\Desktop\\Synthetic Fraud Detection\\research_outputs"
   },
   "split_summary": {
     "train": {
@@ -34,17 +35,17 @@
       "fake": 248
     }
   },
-  "best_val_roc_auc": 0.9997342763117552,
-  "best_epoch": 14,
+  "best_val_roc_auc": 1.0,
+  "best_epoch": 16,
   "test_metrics": {
-    "accuracy": 0.9887133182844243,
-    "precision": 0.9879518072289156,
-    "recall": 0.9919354838709677,
-    "f1": 0.9899396378269618,
-    "roc_auc": 0.998428453267163,
-    "pr_auc": 0.9986217316814918
+    "accuracy": 0.9864559819413092,
+    "precision": 1.0,
+    "recall": 0.9758064516129032,
+    "f1": 0.9877551020408163,
+    "roc_auc": 0.9990488006617039,
+    "pr_auc": 0.9993392219778495
   },
   "params_total": 38659464,
-  "peak_vram_mb": 1472.1171875,
-  "train_time_s": 476.17261481285095
+  "peak_vram_mb": 2397.44140625,
+  "train_time_s": 528.1726322174072
 }
