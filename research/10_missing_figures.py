@@ -436,43 +436,74 @@ def figure_training_curves():
     rn = _read_train_csv(rn_csv)
     ts = _read_train_csv(ts_csv)
 
-    fig, axes = plt.subplots(1, 3, figsize=(DBL_W, 4.5))
+    def _smooth(y: np.ndarray, w: int = 3) -> np.ndarray:
+        """Centered moving-average with edge padding (preserves length)."""
+        if w <= 1 or len(y) < w:
+            return np.asarray(y, dtype=float)
+        pad = w // 2
+        ypad = np.pad(np.asarray(y, dtype=float), pad, mode="edge")
+        kernel = np.ones(w) / w
+        return np.convolve(ypad, kernel, mode="valid")
 
-    common_kw_a = dict(color=COLOR_RESNET,    linestyle=LS_RESNET,
-                       marker=MK_RESNET,    linewidth=2.0, markersize=6.0,
-                       label="ResNet50")
-    common_kw_b = dict(color=COLOR_TWOSTREAM, linestyle=LS_TWOSTREAM,
-                       marker=MK_TWOSTREAM, linewidth=2.0, markersize=6.0,
-                       label="Two-Stream")
+    fig, axes = plt.subplots(1, 3, figsize=(DBL_W, 4.8))
+
+    best_ts  = int(ts["epoch"][int(np.argmax(ts["val_roc_auc"]))])
+    best_rn  = int(rn["epoch"][int(np.argmax(rn["val_roc_auc"]))])
+    n_epochs = int(max(rn["epoch"].max(), ts["epoch"].max()))
+
+    def _plot_pair(ax, ykey, smooth_w=3):
+        # ResNet50: faint raw + bold smoothed
+        ax.plot(rn["epoch"], rn[ykey], color=COLOR_RESNET,
+                linestyle="-", linewidth=1.0, alpha=0.30, zorder=2)
+        ax.scatter(rn["epoch"], rn[ykey], color=COLOR_RESNET,
+                   s=18, alpha=0.45, zorder=3, edgecolors="none")
+        ax.plot(rn["epoch"], _smooth(rn[ykey], smooth_w),
+                color=COLOR_RESNET, linestyle="-", linewidth=2.4,
+                marker=MK_RESNET, markersize=5.5,
+                markeredgecolor="white", markeredgewidth=0.6,
+                label="ResNet50", zorder=5)
+        # Two-Stream
+        ax.plot(ts["epoch"], ts[ykey], color=COLOR_TWOSTREAM,
+                linestyle="-", linewidth=1.0, alpha=0.30, zorder=2)
+        ax.scatter(ts["epoch"], ts[ykey], color=COLOR_TWOSTREAM,
+                   s=18, alpha=0.45, zorder=3, edgecolors="none")
+        ax.plot(ts["epoch"], _smooth(ts[ykey], smooth_w),
+                color=COLOR_TWOSTREAM, linestyle="-", linewidth=2.4,
+                marker=MK_TWOSTREAM, markersize=5.5,
+                markeredgecolor="white", markeredgewidth=0.6,
+                label="Two-Stream", zorder=5)
 
     # (a) train loss
     ax = axes[0]
-    ax.plot(rn["epoch"], rn["train_loss"], **common_kw_a)
-    ax.plot(ts["epoch"], ts["train_loss"], **common_kw_b)
+    _plot_pair(ax, "train_loss", smooth_w=3)
     ax.set_xlabel("Epoch"); ax.set_ylabel("Cross-entropy loss")
     ax.set_title("(a) Training loss")
     ax.legend(loc="upper right")
+    ax.set_xlim(0.5, n_epochs + 0.5)
 
-    # (b) val ROC-AUC
+    # (b) val ROC-AUC (zoomed to show convergence shape)
     ax = axes[1]
-    ax.plot(rn["epoch"], rn["val_roc_auc"], **common_kw_a)
-    ax.plot(ts["epoch"], ts["val_roc_auc"], **common_kw_b)
-    best_ts = int(ts["epoch"][int(np.argmax(ts["val_roc_auc"]))])
+    _plot_pair(ax, "val_roc_auc", smooth_w=3)
+    ax.axvspan(best_ts, n_epochs + 0.5, color="0.85", alpha=0.35,
+               zorder=1, label="converged region")
     ax.axvline(best_ts, linestyle="--", color="black", linewidth=1.2,
-               label=f"best epoch = {best_ts}")
+               label=f"best epoch = {best_ts}", zorder=4)
     ax.set_xlabel("Epoch"); ax.set_ylabel("Validation ROC-AUC")
     ax.set_title("(b) Validation ROC-AUC")
     ax.legend(loc="lower right")
-    ax.set_ylim(0.5, 1.02)
+    ax.set_xlim(0.5, n_epochs + 0.5)
+    ax.set_ylim(0.55, 1.005)
 
     # (c) val recall
     ax = axes[2]
-    ax.plot(rn["epoch"], rn["val_recall"], **common_kw_a)
-    ax.plot(ts["epoch"], ts["val_recall"], **common_kw_b)
+    _plot_pair(ax, "val_recall", smooth_w=3)
+    ax.axvspan(best_ts, n_epochs + 0.5, color="0.85", alpha=0.35, zorder=1)
+    ax.axvline(best_ts, linestyle="--", color="black", linewidth=1.2, zorder=4)
     ax.set_xlabel("Epoch"); ax.set_ylabel("Validation recall on fakes")
-    ax.set_title("(c) Validation recall")
+    ax.set_title("(c) Validation recall on fakes")
     ax.legend(loc="lower right")
-    ax.set_ylim(0, 1.05)
+    ax.set_xlim(0.5, n_epochs + 0.5)
+    ax.set_ylim(0.25, 1.03)
 
     fig.tight_layout()
     fig.savefig(OUT / "10_training_curves.png")
