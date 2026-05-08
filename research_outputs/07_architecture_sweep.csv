@@ -1,0 +1,6 @@
+model,params,test_accuracy,test_precision,test_recall,test_f1,test_roc_auc,test_pr_auc,train_time_s,peak_vram_mb,latency_ms,notes
+ResNet50,23512130,0.921,0.949,0.908,0.928,0.9885,—,251,1723.6,31.5,trains_cleanly
+ConvNeXt-Tiny,28000000,0.440,0.000,0.000,0.000,0.4833,—,216,2412.7,31.2,collapsed_F1=0_predicts_one_class
+EfficientNetV2-S,21000000,0.659,—,—,0.672,0.6993,—,780,2779.7,43.2,underfit_at_lr1e-4
+ViT-S/16,21666434,—,—,—,0.000,0.5169,—,—,—,—,collapsed_after_6_epochs
+Swin-T,—,—,—,—,—,—,—,—,—,—,not_run_due_to_disk_constraint

@@ -1,0 +1,13 @@
+sub_idx,kind,name,true_label,ctype,p_fake,predicted
+372,FP,lva_passport_71,real,real,0.9339146018028259,1
+374,FP,lva_passport_74,real,real,0.6132076382637024,1
+373,FP,lva_passport_73,real,real,0.5937270522117615,1
+359,FP,lva_passport_20,real,real,0.5309205651283264,1
+361,FP,lva_passport_24,real,real,0.5103744864463806,1
+360,FP,lva_passport_23,real,real,0.5056817531585693,1
+178,FN,lva_passport_90_fake_0_59,fake,Inpaint_and_Rewrite,0.3881540894508362,0
+174,FN,lva_passport_66_fake_0_36,fake,Inpaint_and_Rewrite,0.40877819061279297,0
+176,FN,lva_passport_80_fake_0_68,fake,Inpaint_and_Rewrite,0.4274863600730896,0
+175,FN,lva_passport_70_fake_0_109,fake,Crop_and_Replace,0.4290854334831238,0
+179,FN,lva_passport_91_fake_0_99,fake,Inpaint_and_Rewrite,0.44216975569725037,0
+182,FN,lva_passport_98_fake_0_112,fake,Crop_and_Replace,0.44313347339630127,0

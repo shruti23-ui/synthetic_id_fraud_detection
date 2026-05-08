@@ -1,0 +1,13 @@
+sub_idx,kind,name,true_label,ctype,p_fake,predicted
+383,FP,lva_passport_94,real,real,0.4868118464946747,1
+369,FP,lva_passport_42,real,real,0.48052817583084106,1
+371,FP,lva_passport_44,real,real,0.47627517580986023,1
+365,FP,lva_passport_18,real,real,0.469277024269104,1
+382,FP,lva_passport_92,real,real,0.4597809910774231,1
+381,FP,lva_passport_87,real,real,0.45586469769477844,1
+2,FN,alb_id_10_fake_6_67,fake,Inpaint_and_Rewrite,0.046638038009405136,0
+56,FN,esp_id_27_fake_2_66,fake,Inpaint_and_Rewrite,0.2607187032699585,0
+167,FN,lva_passport_70_fake_0_108,fake,Crop_and_Replace,0.41712307929992676,0
+174,FN,lva_passport_98_fake_0_112,fake,Crop_and_Replace,0.4314045310020447,0
+172,FN,lva_passport_92_fake_0_78,fake,Inpaint_and_Rewrite,0.4422149360179901,0
+171,FN,lva_passport_92_fake_0_53,fake,Inpaint_and_Rewrite,0.4536324441432953,0
