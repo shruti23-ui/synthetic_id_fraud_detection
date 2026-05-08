@@ -107,24 +107,67 @@ logger = logging.getLogger(__name__)
 OUT = ROOT / "research_outputs"
 OUT.mkdir(parents=True, exist_ok=True)
 
-# ── Style ─────────────────────────────────────────────────────────────────
+# ── Vibrant presentation-style figure conventions ────────────────────────
+# - DejaVu Sans (matplotlib default), 11 pt body / 12 pt bold titles
+# - white background, light grey grid, all four spines
+# - tab10 palette (vivid blue / vivid red) for high-contrast comparison
+# - presentation-friendly sizes (not IEEE-column-constrained)
 plt.rcParams.update({
-    "font.size": 11,
-    "axes.titlesize": 13,
-    "axes.titleweight": "bold",
-    "axes.labelsize": 11,
-    "axes.grid": True,
-    "grid.linestyle": "--",
-    "grid.alpha": 0.35,
-    "legend.fontsize": 10,
-    "legend.framealpha": 0.92,
-    "figure.dpi": 110,
+    "font.family":         "sans-serif",
+    "font.sans-serif":     ["DejaVu Sans", "Arial", "Helvetica"],
+    "mathtext.fontset":    "dejavusans",
+    "font.size":           11,
+    "axes.titlesize":      12,
+    "axes.titleweight":    "bold",
+    "axes.labelsize":      11,
+    "axes.labelweight":    "normal",
+    "xtick.labelsize":     10,
+    "ytick.labelsize":     10,
+    "xtick.major.size":    4.0,
+    "ytick.major.size":    4.0,
+    "xtick.major.width":   1.0,
+    "ytick.major.width":   1.0,
+    "axes.linewidth":      1.0,
+    "axes.edgecolor":      "black",
+    "axes.spines.top":     True,
+    "axes.spines.right":   True,
+    "axes.facecolor":      "white",
+    "figure.facecolor":    "white",
+    "axes.grid":           True,
+    "grid.linestyle":      "-",
+    "grid.linewidth":      0.5,
+    "grid.color":          "0.85",
+    "grid.alpha":          0.6,
+    "legend.fontsize":     10,
+    "legend.frameon":      True,
+    "legend.fancybox":     True,
+    "legend.framealpha":   0.92,
+    "legend.edgecolor":    "0.7",
+    "legend.borderpad":    0.5,
+    "legend.handlelength": 2.4,
+    "lines.linewidth":     2.0,
+    "lines.markersize":    7.0,
+    "lines.markeredgewidth": 0.8,
+    "savefig.dpi":         200,
+    "savefig.bbox":        "tight",
+    "savefig.pad_inches":  0.05,
+    "figure.dpi":          120,
 })
 
-COLOR_RESNET = "#1565C0"   # blue
-COLOR_TWOSTREAM = "#7B1FA2" # purple
-COLOR_AVGFFT = "#F57C00"   # orange (ablation B if needed)
-COLOR_CHANCE = "#9E9E9E"
+# Presentation-friendly figure widths (inches)
+COL_W = 6.0      # single-panel figure
+DBL_W = 12.0     # multi-panel figure
+
+# Vibrant tab10-style palette
+COLOR_RESNET     = "#1f77b4"   # tab:blue
+COLOR_TWOSTREAM  = "#d62728"   # tab:red
+COLOR_AVGFFT     = "#2ca02c"   # tab:green
+COLOR_CHANCE     = "#7f7f7f"   # tab:grey
+
+LS_RESNET    = "-"
+LS_TWOSTREAM = "-"
+MK_RESNET    = "o"
+MK_TWOSTREAM = "s"
 
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406])
 IMAGENET_STD  = np.array([0.229, 0.224, 0.225])
@@ -191,42 +234,37 @@ def bootstrap_roc_band(y_true: np.ndarray, y_prob: np.ndarray,
 
 def figure_roc(y_true, prob_a, pred_a, prob_b, pred_b,
                name_a: str, name_b: str):
-    fig, ax = plt.subplots(figsize=(7.5, 6.5))
-    for prob, pred, name, color in [
-        (prob_a, pred_a, name_a, COLOR_RESNET),
-        (prob_b, pred_b, name_b, COLOR_TWOSTREAM),
+    fig, ax = plt.subplots(figsize=(COL_W, COL_W))
+    for prob, pred, name, color, ls in [
+        (prob_a, pred_a, name_a, COLOR_RESNET,    LS_RESNET),
+        (prob_b, pred_b, name_b, COLOR_TWOSTREAM, LS_TWOSTREAM),
     ]:
         fpr, tpr, _ = roc_curve(y_true, prob)
         auc = roc_auc_score(y_true, prob)
-        # bootstrap band
         grid, _, lo, hi = bootstrap_roc_band(y_true, prob, n_iter=500)
         ax.fill_between(grid, lo, hi, color=color, alpha=0.18, linewidth=0)
-        ax.plot(fpr, tpr, color=color, linewidth=2.4,
-                label=f"{name}  (AUC = {auc:.4f})")
-        # operating point at 0.5 threshold
+        ax.plot(fpr, tpr, color=color, linewidth=2.2, linestyle=ls,
+                label=f"{name} (AUC = {auc:.4f})")
         op_fpr = float(((pred == 1) & (y_true == 0)).sum()) / float((y_true == 0).sum())
         op_tpr = float(((pred == 1) & (y_true == 1)).sum()) / float((y_true == 1).sum())
         ax.scatter([op_fpr], [op_tpr], color=color, s=80, zorder=5,
                    edgecolors="black", linewidths=1.0)
 
-    ax.plot([0, 1], [0, 1], color=COLOR_CHANCE, linestyle=":",
-            linewidth=1.5, label="Chance (AUC = 0.500)")
+    ax.plot([0, 1], [0, 1], color=COLOR_CHANCE, linestyle="--",
+            linewidth=1.2, label="Chance (AUC = 0.500)")
     ax.set_xlim(-0.005, 1.005)
     ax.set_ylim(-0.005, 1.005)
     ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate (Recall)")
+    ax.set_ylabel("True Positive Rate")
     ax.set_title(
-        "ROC curves — held-out test set (n = %d, %d real / %d fake)\n"
-        "shaded band = 95%% bootstrap CI;  ● = operating point at p = 0.5"
-        % (len(y_true), int((y_true == 0).sum()), int((y_true == 1).sum()))
+        "ROC curves on held-out test set (n = %d)" % len(y_true)
     )
     ax.legend(loc="lower right")
     ax.set_aspect("equal", adjustable="box")
     fig.tight_layout()
-    out = OUT / "10_roc_curves.png"
-    fig.savefig(out, dpi=160, bbox_inches="tight")
+    fig.savefig(OUT / "10_roc_curves.png")
     plt.close(fig)
-    logger.info("Saved: %s", out)
+    logger.info("Saved: 10_roc_curves.png")
 
 
 # ===========================================================================
@@ -235,39 +273,34 @@ def figure_roc(y_true, prob_a, pred_a, prob_b, pred_b,
 
 def figure_pr(y_true, prob_a, pred_a, prob_b, pred_b,
               name_a: str, name_b: str):
-    fig, ax = plt.subplots(figsize=(7.5, 6.5))
+    fig, ax = plt.subplots(figsize=(COL_W, COL_W))
     base_rate = float((y_true == 1).mean())
-    for prob, pred, name, color in [
-        (prob_a, pred_a, name_a, COLOR_RESNET),
-        (prob_b, pred_b, name_b, COLOR_TWOSTREAM),
+    for prob, pred, name, color, ls in [
+        (prob_a, pred_a, name_a, COLOR_RESNET,    LS_RESNET),
+        (prob_b, pred_b, name_b, COLOR_TWOSTREAM, LS_TWOSTREAM),
     ]:
         precision, recall, _ = precision_recall_curve(y_true, prob)
         ap = average_precision_score(y_true, prob)
-        ax.plot(recall, precision, color=color, linewidth=2.4,
-                label=f"{name}  (AP = {ap:.4f})")
-        # operating point
+        ax.plot(recall, precision, color=color, linewidth=2.2, linestyle=ls,
+                label=f"{name} (AP = {ap:.4f})")
         op_p = precision_score(y_true, pred, zero_division=0)
         op_r = recall_score(y_true, pred, zero_division=0)
         ax.scatter([op_r], [op_p], color=color, s=80, zorder=5,
                    edgecolors="black", linewidths=1.0)
 
-    ax.axhline(base_rate, color=COLOR_CHANCE, linestyle=":", linewidth=1.5,
-               label=f"Chance (= base rate {base_rate:.3f})")
+    ax.axhline(base_rate, color=COLOR_CHANCE, linestyle="--", linewidth=1.2,
+               label=f"Chance (base rate = {base_rate:.3f})")
     ax.set_xlim(-0.005, 1.005)
     ax.set_ylim(0.45, 1.005)
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
-    ax.set_title(
-        "Precision–Recall curves — held-out test set (n = %d)\n"
-        "● = operating point at p = 0.5" % len(y_true)
-    )
+    ax.set_title("Precision-Recall curves on held-out test set (n = %d)" % len(y_true))
     ax.legend(loc="lower left")
     ax.set_aspect("equal", adjustable="box")
     fig.tight_layout()
-    out = OUT / "10_pr_curves.png"
-    fig.savefig(out, dpi=160, bbox_inches="tight")
+    fig.savefig(OUT / "10_pr_curves.png")
     plt.close(fig)
-    logger.info("Saved: %s", out)
+    logger.info("Saved: 10_pr_curves.png")
 
 
 # ===========================================================================
@@ -278,16 +311,17 @@ def figure_confusion(y_true, y_pred, name: str, slug: str):
     cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
     cm_norm = cm / cm.sum(axis=1, keepdims=True).clip(min=1)
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.6))
-    titles = ["counts", "row-normalised (recall)"]
+    cmap_name = "Reds" if slug == "two_stream" else "Blues"
+
+    fig, axes = plt.subplots(1, 2, figsize=(DBL_W, 4.2))
+    titles = ["(a) counts", "(b) row-normalised"]
     matrices = [cm, cm_norm]
     fmts = ["d", ".3f"]
-    cmaps = ["Blues", "Purples"]
     label_names = ["Real", "Fake"]
 
-    for ax, m, ttl, fmt, cmap in zip(axes, matrices, titles, fmts, cmaps):
-        im = ax.imshow(m, cmap=cmap, vmin=0,
-                       vmax=(cm.max() if ttl == "counts" else 1.0))
+    for ax, m, ttl, fmt in zip(axes, matrices, titles, fmts):
+        vmax = cm.max() if "counts" in ttl else 1.0
+        im = ax.imshow(m, cmap=cmap_name, vmin=0, vmax=vmax)
         ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
         ax.set_xticklabels(label_names); ax.set_yticklabels(label_names)
         ax.set_xlabel("Predicted")
@@ -296,31 +330,28 @@ def figure_confusion(y_true, y_pred, name: str, slug: str):
         for i in range(2):
             for j in range(2):
                 txt = format(m[i, j], fmt)
-                vmax = cm.max() if ttl == "counts" else 1.0
                 color = "white" if m[i, j] > 0.55 * vmax else "black"
                 ax.text(j, i, txt, ha="center", va="center",
                         color=color, fontsize=14, fontweight="bold")
         ax.grid(False)
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.outline.set_linewidth(0.8)
+        cbar.ax.tick_params(width=0.8, labelsize=9)
 
     n = len(y_true)
-    n_real = int((y_true == 0).sum()); n_fake = int((y_true == 1).sum())
     acc  = accuracy_score(y_true, y_pred)
     prec = precision_score(y_true, y_pred, zero_division=0)
     rec  = recall_score(y_true, y_pred, zero_division=0)
     f1   = f1_score(y_true, y_pred, zero_division=0)
     fig.suptitle(
-        f"Confusion matrix — {name}  "
-        f"(n = {n};  {n_real} real, {n_fake} fake)\n"
-        f"acc = {acc:.4f}   precision = {prec:.4f}   "
-        f"recall = {rec:.4f}   F1 = {f1:.4f}",
-        fontweight="bold",
+        f"Confusion matrix: {name} (n = {n}). "
+        f"acc = {acc:.4f}, precision = {prec:.4f}, "
+        f"recall = {rec:.4f}, F1 = {f1:.4f}"
     )
     fig.tight_layout(rect=[0, 0, 1, 0.93])
-    out = OUT / f"10_confusion_matrix_{slug}.png"
-    fig.savefig(out, dpi=160, bbox_inches="tight")
+    fig.savefig(OUT / f"10_confusion_matrix_{slug}.png")
     plt.close(fig)
-    logger.info("Saved: %s", out)
+    logger.info("Saved: 10_confusion_matrix_%s.png", slug)
 
 
 # ===========================================================================
@@ -349,38 +380,37 @@ def figure_per_ctype_recall(y_true, pred_a, pred_b, ctypes,
     rec_a = recall_per_class(pred_a)
     rec_b = recall_per_class(pred_b)
 
-    width = 0.38
+    width = 0.36
     x = np.arange(len(classes))
-    fig, ax = plt.subplots(figsize=(9.5, 5.4))
+    fig, ax = plt.subplots(figsize=(DBL_W, 5.0))
     bars_a = ax.bar(x - width/2, [rec_a[c] for c in classes],
-                    width, color=COLOR_RESNET, label=name_a)
+                    width, color=COLOR_RESNET, edgecolor="black",
+                    linewidth=1.0, label=name_a)
     bars_b = ax.bar(x + width/2, [rec_b[c] for c in classes],
-                    width, color=COLOR_TWOSTREAM, label=name_b)
+                    width, color=COLOR_TWOSTREAM, edgecolor="black",
+                    linewidth=1.0, label=name_b)
 
     for bars, vals in [(bars_a, rec_a), (bars_b, rec_b)]:
         for b, c in zip(bars, classes):
             v = vals[c]
             if not np.isnan(v):
-                ax.text(b.get_x() + b.get_width()/2, v + 0.01,
+                ax.text(b.get_x() + b.get_width()/2, v + 0.012,
                         f"{v:.3f}", ha="center", va="bottom",
                         fontsize=10, fontweight="bold")
 
     xlabels = [f"{CTYPE_LABELS[c]}\n(n = {counts[c]})" for c in classes]
     ax.set_xticks(x); ax.set_xticklabels(xlabels)
-    ax.set_ylim(0, 1.08)
+    ax.set_ylim(0, 1.10)
     ax.set_ylabel("Per-class recall on test set")
     ax.set_title(
-        "Per-forgery-type recall   (Real-class shows specificity = TN rate)\n"
-        "Crop_and_Replace is the rare class (n = %d) and the hardest."
-        % counts[2]
+        "Per-forgery-type recall (Real column is specificity, the TN rate)"
     )
     ax.legend(loc="lower left")
-    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
+    ax.grid(True, axis="y", linestyle="-", linewidth=0.5, color="0.85", alpha=0.6)
     fig.tight_layout()
-    out = OUT / "10_per_ctype_recall.png"
-    fig.savefig(out, dpi=160, bbox_inches="tight")
+    fig.savefig(OUT / "10_per_ctype_recall.png")
     plt.close(fig)
-    logger.info("Saved: %s", out)
+    logger.info("Saved: 10_per_ctype_recall.png")
 
 
 # ===========================================================================
@@ -406,62 +436,48 @@ def figure_training_curves():
     rn = _read_train_csv(rn_csv)
     ts = _read_train_csv(ts_csv)
 
-    fig, axes = plt.subplots(1, 3, figsize=(17, 5.6))
+    fig, axes = plt.subplots(1, 3, figsize=(DBL_W, 4.5))
+
+    common_kw_a = dict(color=COLOR_RESNET,    linestyle=LS_RESNET,
+                       marker=MK_RESNET,    linewidth=2.0, markersize=6.0,
+                       label="ResNet50")
+    common_kw_b = dict(color=COLOR_TWOSTREAM, linestyle=LS_TWOSTREAM,
+                       marker=MK_TWOSTREAM, linewidth=2.0, markersize=6.0,
+                       label="Two-Stream")
 
     # (a) train loss
     ax = axes[0]
-    ax.plot(rn["epoch"], rn["train_loss"], color=COLOR_RESNET,
-            linewidth=2.0, marker="o", markersize=4,
-            label="ResNet50 (single-stream)")
-    ax.plot(ts["epoch"], ts["train_loss"], color=COLOR_TWOSTREAM,
-            linewidth=2.0, marker="s", markersize=4,
-            label="Two-Stream RGB+FFT + Transformer")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Train cross-entropy loss")
-    ax.set_title("Training loss")
+    ax.plot(rn["epoch"], rn["train_loss"], **common_kw_a)
+    ax.plot(ts["epoch"], ts["train_loss"], **common_kw_b)
+    ax.set_xlabel("Epoch"); ax.set_ylabel("Cross-entropy loss")
+    ax.set_title("(a) Training loss")
     ax.legend(loc="upper right")
 
     # (b) val ROC-AUC
     ax = axes[1]
-    ax.plot(rn["epoch"], rn["val_roc_auc"], color=COLOR_RESNET,
-            linewidth=2.0, marker="o", markersize=4,
-            label="ResNet50 (single-stream)")
-    ax.plot(ts["epoch"], ts["val_roc_auc"], color=COLOR_TWOSTREAM,
-            linewidth=2.0, marker="s", markersize=4,
-            label="Two-Stream RGB+FFT + Transformer")
-    # mark best epoch for two-stream
+    ax.plot(rn["epoch"], rn["val_roc_auc"], **common_kw_a)
+    ax.plot(ts["epoch"], ts["val_roc_auc"], **common_kw_b)
     best_ts = int(ts["epoch"][int(np.argmax(ts["val_roc_auc"]))])
-    ax.axvline(best_ts, linestyle=":", color=COLOR_TWOSTREAM, alpha=0.6,
-               label=f"Two-Stream best epoch = {best_ts}")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Validation ROC-AUC")
-    ax.set_title("Validation ROC-AUC")
+    ax.axvline(best_ts, linestyle="--", color="black", linewidth=1.2,
+               label=f"best epoch = {best_ts}")
+    ax.set_xlabel("Epoch"); ax.set_ylabel("Validation ROC-AUC")
+    ax.set_title("(b) Validation ROC-AUC")
     ax.legend(loc="lower right")
     ax.set_ylim(0.5, 1.02)
 
     # (c) val recall
     ax = axes[2]
-    ax.plot(rn["epoch"], rn["val_recall"], color=COLOR_RESNET,
-            linewidth=2.0, marker="o", markersize=4,
-            label="ResNet50 (single-stream)")
-    ax.plot(ts["epoch"], ts["val_recall"], color=COLOR_TWOSTREAM,
-            linewidth=2.0, marker="s", markersize=4,
-            label="Two-Stream RGB+FFT + Transformer")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Validation recall (sensitivity to fakes)")
-    ax.set_title("Validation recall on fakes")
+    ax.plot(rn["epoch"], rn["val_recall"], **common_kw_a)
+    ax.plot(ts["epoch"], ts["val_recall"], **common_kw_b)
+    ax.set_xlabel("Epoch"); ax.set_ylabel("Validation recall on fakes")
+    ax.set_title("(c) Validation recall")
     ax.legend(loc="lower right")
     ax.set_ylim(0, 1.05)
 
-    fig.suptitle(
-        "Fine-tuning curves — ResNet50 vs Two-Stream  (20 epochs, AdamW lr=1e-4, cosine LR)",
-        fontweight="bold",
-    )
-    fig.tight_layout(rect=[0, 0, 1, 0.94])
-    out = OUT / "10_training_curves.png"
-    fig.savefig(out, dpi=160, bbox_inches="tight")
+    fig.tight_layout()
+    fig.savefig(OUT / "10_training_curves.png")
     plt.close(fig)
-    logger.info("Saved: %s", out)
+    logger.info("Saved: 10_training_curves.png")
 
 
 def figure_lr_schedule():
@@ -470,20 +486,20 @@ def figure_lr_schedule():
         logger.warning("Two-stream train CSV missing — skipping LR figure")
         return
     ts = _read_train_csv(ts_csv)
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    fig, ax = plt.subplots(figsize=(COL_W, COL_W * 0.7))
     ax.plot(ts["epoch"], ts["lr"], color=COLOR_TWOSTREAM,
-            linewidth=2.2, marker="s", markersize=5)
+            linewidth=2.0, marker=MK_TWOSTREAM, markersize=7.0,
+            markerfacecolor=COLOR_TWOSTREAM, markeredgecolor="black",
+            markeredgewidth=0.8)
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Learning rate")
     ax.set_title(
-        "Learning-rate schedule — cosine annealing (Two-Stream training)\n"
-        f"peak lr ≈ {ts['lr'].max():.2e},  final lr ≈ {ts['lr'][-1]:.2e},  20 epochs"
+        f"Cosine LR schedule (peak {ts['lr'].max():.2e}, 20 epochs)"
     )
     fig.tight_layout()
-    out = OUT / "10_lr_schedule.png"
-    fig.savefig(out, dpi=160, bbox_inches="tight")
+    fig.savefig(OUT / "10_lr_schedule.png")
     plt.close(fig)
-    logger.info("Saved: %s", out)
+    logger.info("Saved: 10_lr_schedule.png")
 
 
 # ===========================================================================
@@ -502,28 +518,27 @@ def figure_threshold_sweep(y_true, y_prob, name: str):
     best_t = float(thresholds[int(np.argmax(f_))])
     best_f = float(f_.max())
 
-    fig, ax = plt.subplots(figsize=(8.5, 5.2))
-    ax.plot(thresholds, p_, label="Precision", color="#1565C0", linewidth=2.2)
-    ax.plot(thresholds, r_, label="Recall",    color="#D32F2F", linewidth=2.2)
-    ax.plot(thresholds, f_, label="F1",        color="#2E7D32", linewidth=2.2)
-    ax.axvline(0.5, color="black", linestyle=":", linewidth=1.2,
-               label="default threshold = 0.5")
-    ax.axvline(best_t, color="#7B1FA2", linestyle="--", linewidth=1.4,
-               label=f"best F1 threshold = {best_t:.2f}  (F1 = {best_f:.4f})")
+    fig, ax = plt.subplots(figsize=(COL_W, COL_W * 0.78))
+    ax.plot(thresholds, p_, label="Precision", color="#1f77b4",
+            linestyle="-",  linewidth=2.0)
+    ax.plot(thresholds, r_, label="Recall",    color="#2ca02c",
+            linestyle="-", linewidth=2.0)
+    ax.plot(thresholds, f_, label="F1",        color="#9467bd",
+            linestyle="-",  linewidth=2.4)
+    ax.axvline(0.5, color="0.6", linestyle="--", linewidth=1.0,
+               label="default = 0.5")
+    ax.axvline(best_t, color=COLOR_TWOSTREAM, linestyle="-", linewidth=1.4,
+               label=f"best F1 = {best_t:.2f} ({best_f:.4f})")
     ax.set_xlim(0, 1)
     ax.set_ylim(0.85, 1.005)
     ax.set_xlabel("Decision threshold on p(fake)")
-    ax.set_ylabel("Test-set metric value")
-    ax.set_title(
-        f"Threshold sweep — {name}\n"
-        f"y-axis zoomed to [0.85, 1.0] — all metrics stay above 0.90 across the entire range"
-    )
+    ax.set_ylabel("Test-set metric")
+    ax.set_title("Threshold sweep, Two-Stream model (y-axis zoomed)")
     ax.legend(loc="lower left")
     fig.tight_layout()
-    out = OUT / "10_threshold_sweep.png"
-    fig.savefig(out, dpi=160, bbox_inches="tight")
+    fig.savefig(OUT / "10_threshold_sweep.png")
     plt.close(fig)
-    logger.info("Saved: %s", out)
+    logger.info("Saved: 10_threshold_sweep.png")
 
 
 # ===========================================================================
@@ -547,12 +562,9 @@ def figure_fft_spectrum(records: list[dict], test_idx: list[int],
             grouped[ct].append(i)
 
     cols = max(len(v) for v in grouped.values())
-    rows = 2 * 3  # 3 row-pairs (image, FFT)
-    fig, axes = plt.subplots(6, cols, figsize=(cols * 2.5, 11.5))
+    fig, axes = plt.subplots(6, cols, figsize=(DBL_W, DBL_W * 1.10))
     fig.suptitle(
-        "Frequency-domain signature — log-magnitude FFT of real vs forged documents\n"
-        "Top of each pair: original RGB.  Bottom: log(1 + |FFT|) with DC centred (mean over channels).",
-        fontweight="bold",
+        "Frequency-domain signature: log(1 + |FFT|), DC centred (channel mean)"
     )
 
     for row_group, (ct, idxs) in enumerate(grouped.items()):
@@ -574,16 +586,16 @@ def figure_fft_spectrum(records: list[dict], test_idx: list[int],
             ax_top.imshow(rgb)
             ax_top.axis("off")
             if col == 0:
-                ax_top.text(-0.18, 0.5, f"{ct}\n(image)",
+                ax_top.text(-0.12, 0.5, f"{ct}\n(image)",
                             transform=ax_top.transAxes,
                             ha="right", va="center", fontsize=10,
                             fontweight="bold", rotation=90)
-            ax_top.set_title(rec["path"].stem, fontsize=8)
+            ax_top.set_title(rec["path"].stem, fontsize=9)
 
-            ax_bot.imshow(spec_np, cmap="inferno")
+            ax_bot.imshow(spec_np, cmap="viridis")
             ax_bot.axis("off")
             if col == 0:
-                ax_bot.text(-0.18, 0.5, f"{ct}\n(FFT)",
+                ax_bot.text(-0.12, 0.5, f"{ct}\n(FFT)",
                             transform=ax_bot.transAxes,
                             ha="right", va="center", fontsize=10,
                             fontweight="bold", rotation=90)
@@ -593,11 +605,10 @@ def figure_fft_spectrum(records: list[dict], test_idx: list[int],
             axes[2*row_group, col].axis("off")
             axes[2*row_group + 1, col].axis("off")
 
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
-    out = OUT / "10_fft_spectrum.png"
-    fig.savefig(out, dpi=160, bbox_inches="tight")
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(OUT / "10_fft_spectrum.png")
     plt.close(fig)
-    logger.info("Saved: %s", out)
+    logger.info("Saved: 10_fft_spectrum.png")
 
 
 # ===========================================================================
@@ -678,14 +689,13 @@ def figure_gradcam_positives_per_ctype(
         logger.warning("No positives common to both models — skipping figure")
         cam_rn.remove(); cam_ts.remove()
         return
-    fig, axes = plt.subplots(rows, 3, figsize=(11.5, rows * 3.4))
+    fig, axes = plt.subplots(rows, 3, figsize=(DBL_W, rows * (DBL_W / 3.0) * 1.05))
     if rows == 1:
         axes = axes.reshape(1, 3)
-    fig.suptitle(
-        "Grad-CAM on correctly-classified fakes (true positives) — both models agree\n"
-        "Left: original.  Middle: ResNet50 layer4.  Right: Two-Stream RGB-branch layer4.",
-        fontweight="bold", fontsize=12,
-    )
+
+    col_titles = ["Input", "ResNet50 (layer4)", "Two-Stream RGB branch (layer4)"]
+    for c, ct_title in enumerate(col_titles):
+        axes[0, c].set_title(ct_title, fontsize=11, fontweight="bold")
 
     r = 0
     for ct, lst in targets.items():
@@ -695,25 +705,32 @@ def figure_gradcam_positives_per_ctype(
             heat_b = cam_ts.heatmap(two_stream, t.clone(), target_class=1)[0]
             rgb = denormalise(t.squeeze(0))
 
-            axes[r, 0].imshow(rgb); axes[r, 0].axis("off")
-            axes[r, 0].set_title(
-                f"{ct}\n{rec['path'].stem}", fontsize=9)
-            axes[r, 1].imshow(rgb); axes[r, 1].imshow(heat_a, cmap="jet", alpha=0.45)
-            axes[r, 1].axis("off")
-            axes[r, 1].set_title(f"ResNet50  p(fake)={prob_a[sub]:.3f}",
-                                 fontsize=9)
-            axes[r, 2].imshow(rgb); axes[r, 2].imshow(heat_b, cmap="jet", alpha=0.45)
-            axes[r, 2].axis("off")
-            axes[r, 2].set_title(f"Two-Stream  p(fake)={prob_b[sub]:.3f}",
-                                 fontsize=9)
+            axes[r, 0].imshow(rgb)
+            axes[r, 0].set_xticks([]); axes[r, 0].set_yticks([])
+            axes[r, 0].set_ylabel(f"{ct}\n{rec['path'].stem}\n p(fake) = {prob_b[sub]:.3f}",
+                                  fontsize=9, rotation=0, labelpad=46, va="center", ha="right")
+            for spine in axes[r, 0].spines.values():
+                spine.set_linewidth(0.8)
+            axes[r, 1].imshow(rgb)
+            axes[r, 1].imshow(heat_a, cmap="jet", alpha=0.45)
+            axes[r, 1].set_xticks([]); axes[r, 1].set_yticks([])
+            for spine in axes[r, 1].spines.values():
+                spine.set_linewidth(0.8)
+            axes[r, 2].imshow(rgb)
+            axes[r, 2].imshow(heat_b, cmap="jet", alpha=0.45)
+            axes[r, 2].set_xticks([]); axes[r, 2].set_yticks([])
+            for spine in axes[r, 2].spines.values():
+                spine.set_linewidth(0.8)
             r += 1
 
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-    out = OUT / "10_gradcam_correct_per_ctype.png"
-    fig.savefig(out, dpi=160, bbox_inches="tight")
+    fig.suptitle(
+        "Grad-CAM on correctly-classified fakes (both models agree)"
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.savefig(OUT / "10_gradcam_correct_per_ctype.png")
     plt.close(fig)
     cam_rn.remove(); cam_ts.remove()
-    logger.info("Saved: %s", out)
+    logger.info("Saved: 10_gradcam_correct_per_ctype.png")
 
 
 # ===========================================================================
@@ -738,7 +755,7 @@ def figure_gradcam_resnet_vs_two_stream(
         fig, ax = plt.subplots(figsize=(8, 3))
         ax.text(0.5, 0.5,
                 "No cases where ResNet50 missed but Two-Stream caught.\n"
-                "(McNemar b-cell empty — skip side-by-side Grad-CAM.)",
+                "(McNemar b-cell empty: skip side-by-side Grad-CAM.)",
                 ha="center", va="center", fontsize=12, fontweight="bold")
         ax.axis("off")
         fig.tight_layout()
@@ -755,15 +772,17 @@ def figure_gradcam_resnet_vs_two_stream(
     cam_ts = GradCAM(two_stream.rgb_features[-1])
 
     n = len(target_subs)
-    fig, axes = plt.subplots(n, 3, figsize=(13.5, n * 3.6))
+    fig, axes = plt.subplots(n, 3, figsize=(DBL_W, n * (DBL_W / 3.0) * 1.05))
     if n == 1:
         axes = axes.reshape(1, 3)
-    fig.suptitle(
-        "Where the FFT branch helps — ResNet50 missed these forgeries; Two-Stream caught them\n"
-        "Same image, two models.  Left: original.  "
-        "Middle: ResNet50 layer4 Grad-CAM.  Right: Two-Stream RGB-branch layer4 Grad-CAM.",
-        fontweight="bold", fontsize=12,
-    )
+
+    col_titles = [
+        "Input",
+        "ResNet50: predicted REAL (wrong)",
+        "Two-Stream: predicted FAKE (correct)",
+    ]
+    for c, ct_title in enumerate(col_titles):
+        axes[0, c].set_title(ct_title, fontsize=11, fontweight="bold")
 
     for r, sub in enumerate(target_subs):
         rec = records[test_idx[sub]]
@@ -773,27 +792,37 @@ def figure_gradcam_resnet_vs_two_stream(
         rgb = denormalise(t.squeeze(0))
         ct = rec.get("ctype") or "real"
 
-        axes[r, 0].imshow(rgb); axes[r, 0].axis("off")
-        axes[r, 0].set_title(f"{ct}\n{rec['path'].stem}", fontsize=10)
+        axes[r, 0].imshow(rgb)
+        axes[r, 0].set_xticks([]); axes[r, 0].set_yticks([])
+        axes[r, 0].set_ylabel(f"{ct}\n{rec['path'].stem}",
+                              fontsize=9, rotation=0, labelpad=46,
+                              va="center", ha="right")
         axes[r, 1].imshow(rgb); axes[r, 1].imshow(heat_a, cmap="jet", alpha=0.45)
-        axes[r, 1].axis("off")
-        axes[r, 1].set_title(
-            f"ResNet50:  p(fake)={prob_a[sub]:.3f}\n→ predicted REAL  (wrong)",
-            fontsize=10, color="#B71C1C", fontweight="bold",
-        )
+        axes[r, 1].set_xticks([]); axes[r, 1].set_yticks([])
+        axes[r, 1].text(0.02, 0.96, f"p(fake) = {prob_a[sub]:.3f}",
+                        transform=axes[r, 1].transAxes,
+                        ha="left", va="top", fontsize=9, color="white",
+                        bbox=dict(facecolor="black", edgecolor="none",
+                                  alpha=0.6, pad=2.5))
         axes[r, 2].imshow(rgb); axes[r, 2].imshow(heat_b, cmap="jet", alpha=0.45)
-        axes[r, 2].axis("off")
-        axes[r, 2].set_title(
-            f"Two-Stream:  p(fake)={prob_b[sub]:.3f}\n→ predicted FAKE  (correct)",
-            fontsize=10, color="#1B5E20", fontweight="bold",
-        )
+        axes[r, 2].set_xticks([]); axes[r, 2].set_yticks([])
+        axes[r, 2].text(0.02, 0.96, f"p(fake) = {prob_b[sub]:.3f}",
+                        transform=axes[r, 2].transAxes,
+                        ha="left", va="top", fontsize=9, color="white",
+                        bbox=dict(facecolor="black", edgecolor="none",
+                                  alpha=0.6, pad=2.5))
+        for c in range(3):
+            for spine in axes[r, c].spines.values():
+                spine.set_linewidth(0.8)
 
-    fig.tight_layout(rect=[0, 0, 1, 0.94])
-    out = OUT / "10_gradcam_resnet_vs_two_stream.png"
-    fig.savefig(out, dpi=160, bbox_inches="tight")
+    fig.suptitle(
+        "Cases where the FFT branch makes the difference (ResNet50 missed; Two-Stream caught)"
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(OUT / "10_gradcam_resnet_vs_two_stream.png")
     plt.close(fig)
     cam_rn.remove(); cam_ts.remove()
-    logger.info("Saved: %s", out)
+    logger.info("Saved: 10_gradcam_resnet_vs_two_stream.png")
 
 
 # ===========================================================================
