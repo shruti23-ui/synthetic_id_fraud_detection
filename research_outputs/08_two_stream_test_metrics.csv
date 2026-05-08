@@ -1,0 +1,2 @@
+model,accuracy,precision,recall,f1,roc_auc,pr_auc
+TwoStreamForgeryNet,0.9887,0.988,0.9919,0.9899,0.9984,0.9986
