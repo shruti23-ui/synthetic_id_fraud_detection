@@ -38,9 +38,13 @@ from sklearn.metrics import (
 import csv
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
+
+# tqdm bars as ASCII (works on any terminal codepage, esp. Windows cp1252)
+os.environ.setdefault("TQDM_ASCII", " 123456789#")
 
 import matplotlib
 matplotlib.use("Agg")

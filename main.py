@@ -28,9 +28,16 @@ Usage:
 import argparse
 import io
 import logging
+import os
 import sys
 import time
 from pathlib import Path
+
+# Force tqdm to render ASCII bars (`#####`) instead of Unicode blocks
+# (`█████`) — the Windows console default codepage (cp1252) garbles the
+# block characters into things like 'ΓûÅ'. Must be set BEFORE any module
+# imports tqdm, hence here at the top of main.py.
+os.environ.setdefault("TQDM_ASCII", " 123456789#")
 
 # Ensure outputs dir exists before FileHandler writes to it
 Path("outputs").mkdir(parents=True, exist_ok=True)
