@@ -428,91 +428,84 @@ def _read_train_csv(path: Path) -> dict[str, np.ndarray]:
 
 
 def figure_training_curves():
+    """Save three separate figures (training loss, val ROC-AUC, val recall)
+    using raw per-epoch values (no smoothing) with extended y-axis headroom."""
     rn_csv = ROOT / "outputs" / "metrics" / "supervised_train.csv"
     ts_csv = ROOT / "research_outputs" / "08_two_stream_train.csv"
     if not rn_csv.exists() or not ts_csv.exists():
-        logger.warning("Training CSVs missing — skipping training curves figure")
+        logger.warning("Training CSVs missing - skipping training curves figure")
         return
     rn = _read_train_csv(rn_csv)
     ts = _read_train_csv(ts_csv)
-
-    def _smooth(y: np.ndarray, w: int = 3) -> np.ndarray:
-        """Centered moving-average with edge padding (preserves length)."""
-        if w <= 1 or len(y) < w:
-            return np.asarray(y, dtype=float)
-        pad = w // 2
-        ypad = np.pad(np.asarray(y, dtype=float), pad, mode="edge")
-        kernel = np.ones(w) / w
-        return np.convolve(ypad, kernel, mode="valid")
-
-    fig, axes = plt.subplots(1, 3, figsize=(DBL_W, 4.8))
 
     best_ts  = int(ts["epoch"][int(np.argmax(ts["val_roc_auc"]))])
     best_rn  = int(rn["epoch"][int(np.argmax(rn["val_roc_auc"]))])
     n_epochs = int(max(rn["epoch"].max(), ts["epoch"].max()))
 
-    def _plot_pair(ax, ykey, smooth_w=3):
-        # ResNet50: faint raw + bold smoothed
+    def _plot_raw(ax, ykey):
         ax.plot(rn["epoch"], rn[ykey], color=COLOR_RESNET,
-                linestyle="-", linewidth=1.0, alpha=0.30, zorder=2)
-        ax.scatter(rn["epoch"], rn[ykey], color=COLOR_RESNET,
-                   s=18, alpha=0.45, zorder=3, edgecolors="none")
-        ax.plot(rn["epoch"], _smooth(rn[ykey], smooth_w),
-                color=COLOR_RESNET, linestyle="-", linewidth=2.4,
-                marker=MK_RESNET, markersize=5.5,
-                markeredgecolor="white", markeredgewidth=0.6,
-                label="ResNet50", zorder=5)
-        # Two-Stream
+                linestyle="-", linewidth=2.2,
+                marker=MK_RESNET, markersize=6.5,
+                markeredgecolor="white", markeredgewidth=0.7,
+                label="ResNet50", zorder=4)
         ax.plot(ts["epoch"], ts[ykey], color=COLOR_TWOSTREAM,
-                linestyle="-", linewidth=1.0, alpha=0.30, zorder=2)
-        ax.scatter(ts["epoch"], ts[ykey], color=COLOR_TWOSTREAM,
-                   s=18, alpha=0.45, zorder=3, edgecolors="none")
-        ax.plot(ts["epoch"], _smooth(ts[ykey], smooth_w),
-                color=COLOR_TWOSTREAM, linestyle="-", linewidth=2.4,
-                marker=MK_TWOSTREAM, markersize=5.5,
-                markeredgecolor="white", markeredgewidth=0.6,
-                label="Two-Stream", zorder=5)
+                linestyle="-", linewidth=2.2,
+                marker=MK_TWOSTREAM, markersize=6.5,
+                markeredgecolor="white", markeredgewidth=0.7,
+                label="Two-Stream", zorder=4)
 
-    # (a) train loss
-    ax = axes[0]
-    _plot_pair(ax, "train_loss", smooth_w=3)
+    # ── (a) Training loss ────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(7.0, 5.0))
+    _plot_raw(ax, "train_loss")
     ax.set_xlabel("Epoch"); ax.set_ylabel("Cross-entropy loss")
-    ax.set_title("(a) Training loss")
+    ax.set_title("Training loss")
     ax.legend(loc="upper right")
     ax.set_xlim(0.5, n_epochs + 0.5)
+    y_max = max(rn["train_loss"].max(), ts["train_loss"].max())
+    y_min = min(rn["train_loss"].min(), ts["train_loss"].min())
+    ax.set_ylim(max(0.0, y_min - 0.05), y_max + 0.10)
+    fig.tight_layout()
+    fig.savefig(OUT / "10_training_loss.png")
+    plt.close(fig)
+    logger.info("Saved: 10_training_loss.png")
 
-    # (b) val ROC-AUC (zoomed to show convergence shape)
-    ax = axes[1]
-    _plot_pair(ax, "val_roc_auc", smooth_w=3)
+    # ── (b) Validation ROC-AUC ───────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(7.0, 5.0))
+    _plot_raw(ax, "val_roc_auc")
     ax.axvspan(min(best_ts, best_rn), n_epochs + 0.5, color="0.85", alpha=0.30,
                zorder=1, label="converged region")
-    ax.axvline(best_rn, linestyle=":",  color=COLOR_RESNET,    linewidth=1.6,
-               label=f"ResNet50 best = {best_rn}", zorder=4)
-    ax.axvline(best_ts, linestyle="--", color=COLOR_TWOSTREAM, linewidth=1.6,
-               label=f"Two-Stream best = {best_ts}", zorder=4)
+    ax.axvline(best_rn, linestyle=":",  color=COLOR_RESNET,    linewidth=1.8,
+               label=f"ResNet50 best = {best_rn}", zorder=3)
+    ax.axvline(best_ts, linestyle="--", color=COLOR_TWOSTREAM, linewidth=1.8,
+               label=f"Two-Stream best = {best_ts}", zorder=3)
     ax.set_xlabel("Epoch"); ax.set_ylabel("Validation ROC-AUC")
-    ax.set_title("(b) Validation ROC-AUC")
+    ax.set_title("Validation ROC-AUC")
     ax.legend(loc="lower right")
     ax.set_xlim(0.5, n_epochs + 0.5)
-    ax.set_ylim(0.55, 1.005)
-
-    # (c) val recall
-    ax = axes[2]
-    _plot_pair(ax, "val_recall", smooth_w=3)
-    ax.axvspan(min(best_ts, best_rn), n_epochs + 0.5, color="0.85",
-               alpha=0.30, zorder=1)
-    ax.axvline(best_rn, linestyle=":",  color=COLOR_RESNET,    linewidth=1.6, zorder=4)
-    ax.axvline(best_ts, linestyle="--", color=COLOR_TWOSTREAM, linewidth=1.6, zorder=4)
-    ax.set_xlabel("Epoch"); ax.set_ylabel("Validation recall on fakes")
-    ax.set_title("(c) Validation recall on fakes")
-    ax.legend(loc="lower right")
-    ax.set_xlim(0.5, n_epochs + 0.5)
-    ax.set_ylim(0.25, 1.03)
-
+    ax.set_ylim(0.50, 1.04)
     fig.tight_layout()
-    fig.savefig(OUT / "10_training_curves.png")
+    fig.savefig(OUT / "10_val_roc_auc.png")
     plt.close(fig)
-    logger.info("Saved: 10_training_curves.png")
+    logger.info("Saved: 10_val_roc_auc.png")
+
+    # ── (c) Validation recall on fakes ───────────────────────────────────
+    fig, ax = plt.subplots(figsize=(7.0, 5.0))
+    _plot_raw(ax, "val_recall")
+    ax.axvspan(min(best_ts, best_rn), n_epochs + 0.5, color="0.85",
+               alpha=0.30, zorder=1, label="converged region")
+    ax.axvline(best_rn, linestyle=":",  color=COLOR_RESNET,    linewidth=1.8,
+               label=f"ResNet50 best = {best_rn}", zorder=3)
+    ax.axvline(best_ts, linestyle="--", color=COLOR_TWOSTREAM, linewidth=1.8,
+               label=f"Two-Stream best = {best_ts}", zorder=3)
+    ax.set_xlabel("Epoch"); ax.set_ylabel("Validation recall on fakes")
+    ax.set_title("Validation recall on fakes")
+    ax.legend(loc="lower left")
+    ax.set_xlim(0.5, n_epochs + 0.5)
+    ax.set_ylim(0.20, 1.10)
+    fig.tight_layout()
+    fig.savefig(OUT / "10_val_recall.png")
+    plt.close(fig)
+    logger.info("Saved: 10_val_recall.png")
 
 
 def figure_lr_schedule():
