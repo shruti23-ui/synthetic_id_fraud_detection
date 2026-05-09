@@ -484,10 +484,12 @@ def figure_training_curves():
     # (b) val ROC-AUC (zoomed to show convergence shape)
     ax = axes[1]
     _plot_pair(ax, "val_roc_auc", smooth_w=3)
-    ax.axvspan(best_ts, n_epochs + 0.5, color="0.85", alpha=0.35,
+    ax.axvspan(min(best_ts, best_rn), n_epochs + 0.5, color="0.85", alpha=0.30,
                zorder=1, label="converged region")
-    ax.axvline(best_ts, linestyle="--", color="black", linewidth=1.2,
-               label=f"best epoch = {best_ts}", zorder=4)
+    ax.axvline(best_rn, linestyle=":",  color=COLOR_RESNET,    linewidth=1.6,
+               label=f"ResNet50 best = {best_rn}", zorder=4)
+    ax.axvline(best_ts, linestyle="--", color=COLOR_TWOSTREAM, linewidth=1.6,
+               label=f"Two-Stream best = {best_ts}", zorder=4)
     ax.set_xlabel("Epoch"); ax.set_ylabel("Validation ROC-AUC")
     ax.set_title("(b) Validation ROC-AUC")
     ax.legend(loc="lower right")
@@ -497,8 +499,10 @@ def figure_training_curves():
     # (c) val recall
     ax = axes[2]
     _plot_pair(ax, "val_recall", smooth_w=3)
-    ax.axvspan(best_ts, n_epochs + 0.5, color="0.85", alpha=0.35, zorder=1)
-    ax.axvline(best_ts, linestyle="--", color="black", linewidth=1.2, zorder=4)
+    ax.axvspan(min(best_ts, best_rn), n_epochs + 0.5, color="0.85",
+               alpha=0.30, zorder=1)
+    ax.axvline(best_rn, linestyle=":",  color=COLOR_RESNET,    linewidth=1.6, zorder=4)
+    ax.axvline(best_ts, linestyle="--", color=COLOR_TWOSTREAM, linewidth=1.6, zorder=4)
     ax.set_xlabel("Epoch"); ax.set_ylabel("Validation recall on fakes")
     ax.set_title("(c) Validation recall on fakes")
     ax.legend(loc="lower right")
@@ -584,62 +588,89 @@ def _load_image_tensor(path: Path, image_size: int, device: torch.device) -> tor
 
 
 def figure_fft_spectrum(records: list[dict], test_idx: list[int],
-                        device: torch.device, image_size: int):
-    # Pick 3 reals, 3 inpaint, 3 crop_and_replace
-    grouped: dict[str, list[int]] = {"real": [], "Inpaint_and_Rewrite": [], "Crop_and_Replace": []}
-    for i in test_idx:
-        ct = records[i].get("ctype") or "real"
-        if ct in grouped and len(grouped[ct]) < 3:
-            grouped[ct].append(i)
+                        device: torch.device, image_size: int,
+                        n_templates: int = 3):
+    """Template-paired FFT spectra: same template shown across {real,
+    inpaint, crop_and_replace} so spectral differences are attributable
+    to the manipulation, not to inter-template variation."""
 
-    cols = max(len(v) for v in grouped.values())
-    fig, axes = plt.subplots(6, cols, figsize=(DBL_W, DBL_W * 1.10))
+    def _template_of(p) -> str:
+        s = p.stem
+        return s.split("_fake_")[0] if "_fake_" in s else s
+
+    # Group test indices by template id, then keep only templates that
+    # have at least one sample of each ctype in the test split.
+    by_tpl: dict[str, dict[str, int]] = {}
+    for i in test_idx:
+        rec = records[i]
+        ct  = rec.get("ctype") or "real"
+        tpl = _template_of(rec["path"])
+        slot = by_tpl.setdefault(tpl, {})
+        slot.setdefault(ct, i)  # first-seen wins, deterministic
+
+    needed = {"real", "Inpaint_and_Rewrite", "Crop_and_Replace"}
+    triplets = [(tpl, slot) for tpl, slot in by_tpl.items()
+                if needed.issubset(slot.keys())]
+    if not triplets:
+        logger.warning("No template has all three ctypes in test set; "
+                       "falling back to per-ctype unrelated samples")
+        return
+    triplets = sorted(triplets, key=lambda x: x[0])[:n_templates]
+
+    col_order = ["real", "Inpaint_and_Rewrite", "Crop_and_Replace"]
+    cols = len(col_order)
+    rows = 2 * len(triplets)  # image row + FFT row per template
+
+    fig, axes = plt.subplots(rows, cols, figsize=(DBL_W, DBL_W * 1.10))
+    if rows == 1:
+        axes = axes.reshape(1, -1)
     fig.suptitle(
-        "Frequency-domain signature: log(1 + |FFT|), DC centred (channel mean)"
+        f"Frequency-domain signature on template-paired triplets: "
+        f"log(1 + |FFT|), DC centred (channel mean) ({len(triplets)} templates)"
     )
 
-    for row_group, (ct, idxs) in enumerate(grouped.items()):
-        for col, gi in enumerate(idxs):
+    for c, ct in enumerate(col_order):
+        axes[0, c].set_title(ct, fontsize=11, fontweight="bold")
+
+    for r_tpl, (tpl, slot) in enumerate(triplets):
+        r_top = 2 * r_tpl
+        r_bot = 2 * r_tpl + 1
+        for c, ct in enumerate(col_order):
+            gi  = slot[ct]
             rec = records[gi]
-            t = _load_image_tensor(rec["path"], image_size, device)
+            t   = _load_image_tensor(rec["path"], image_size, device)
             with torch.no_grad():
-                spec = _compute_fft_magnitude(t)  # (1, 3, H, W)
+                spec = _compute_fft_magnitude(t)
             spec_np = spec.squeeze(0).mean(dim=0).cpu().numpy()
             rgb = (t.squeeze(0).cpu().numpy() *
                    IMAGENET_STD.reshape(3, 1, 1) + IMAGENET_MEAN.reshape(3, 1, 1))
             rgb = np.clip(rgb.transpose(1, 2, 0), 0, 1)
 
-            r_top = 2 * row_group
-            r_bot = 2 * row_group + 1
-            ax_top = axes[r_top, col] if cols > 1 else axes[r_top]
-            ax_bot = axes[r_bot, col] if cols > 1 else axes[r_bot]
+            ax_top = axes[r_top, c]
+            ax_bot = axes[r_bot, c]
+            ax_top.imshow(rgb); ax_top.axis("off")
+            ax_top.text(0.02, 0.96, rec["path"].stem,
+                        transform=ax_top.transAxes,
+                        ha="left", va="top", fontsize=8, color="white",
+                        bbox=dict(facecolor="black", edgecolor="none",
+                                  alpha=0.6, pad=2.0))
+            ax_bot.imshow(spec_np, cmap="viridis"); ax_bot.axis("off")
 
-            ax_top.imshow(rgb)
-            ax_top.axis("off")
-            if col == 0:
-                ax_top.text(-0.12, 0.5, f"{ct}\n(image)",
+            if c == 0:
+                ax_top.text(-0.06, 0.5, f"{tpl}\n(image)",
                             transform=ax_top.transAxes,
                             ha="right", va="center", fontsize=10,
                             fontweight="bold", rotation=90)
-            ax_top.set_title(rec["path"].stem, fontsize=9)
-
-            ax_bot.imshow(spec_np, cmap="viridis")
-            ax_bot.axis("off")
-            if col == 0:
-                ax_bot.text(-0.12, 0.5, f"{ct}\n(FFT)",
+                ax_bot.text(-0.06, 0.5, f"{tpl}\n(FFT)",
                             transform=ax_bot.transAxes,
                             ha="right", va="center", fontsize=10,
                             fontweight="bold", rotation=90)
 
-        # Hide unused columns in this group
-        for col in range(len(idxs), cols):
-            axes[2*row_group, col].axis("off")
-            axes[2*row_group + 1, col].axis("off")
-
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(OUT / "10_fft_spectrum.png")
     plt.close(fig)
-    logger.info("Saved: 10_fft_spectrum.png")
+    logger.info("Saved: 10_fft_spectrum.png (template-paired, %d templates)",
+                len(triplets))
 
 
 # ===========================================================================
@@ -777,6 +808,16 @@ def figure_gradcam_resnet_vs_two_stream(
 ):
     """Pick test fakes that ResNet50 wrongly calls real but Two-Stream
     correctly catches. Render Grad-CAM from each model side-by-side."""
+    # McNemar 2x2 cell counts on the fakes only
+    fake_mask = (y_true == 1)
+    a_cell = int(((pred_a == 1) & (pred_b == 1) & fake_mask).sum())  # both right
+    b_cell = int(((pred_a == 0) & (pred_b == 1) & fake_mask).sum())  # ResNet wrong, TS right
+    c_cell = int(((pred_a == 1) & (pred_b == 0) & fake_mask).sum())  # ResNet right, TS wrong
+    d_cell = int(((pred_a == 0) & (pred_b == 0) & fake_mask).sum())  # both wrong
+    logger.info("McNemar on fakes: a=%d (both right), b=%d (RN wrong, TS right), "
+                "c=%d (RN right, TS wrong), d=%d (both wrong)",
+                a_cell, b_cell, c_cell, d_cell)
+
     target_subs = []
     for sub in range(len(y_true)):
         if y_true[sub] == 1 and pred_a[sub] == 0 and pred_b[sub] == 1:
@@ -786,7 +827,8 @@ def figure_gradcam_resnet_vs_two_stream(
         fig, ax = plt.subplots(figsize=(8, 3))
         ax.text(0.5, 0.5,
                 "No cases where ResNet50 missed but Two-Stream caught.\n"
-                "(McNemar b-cell empty: skip side-by-side Grad-CAM.)",
+                "(McNemar b-cell empty: skip side-by-side Grad-CAM.)\n"
+                f"a={a_cell}, b={b_cell}, c={c_cell}, d={d_cell}",
                 ha="center", va="center", fontsize=12, fontweight="bold")
         ax.axis("off")
         fig.tight_layout()
@@ -849,7 +891,20 @@ def figure_gradcam_resnet_vs_two_stream(
     fig.suptitle(
         "Cases where the FFT branch makes the difference (ResNet50 missed; Two-Stream caught)"
     )
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    # McNemar 2x2 summary box, anchored to bottom-left of the figure
+    summary_txt = (
+        f"McNemar 2x2 on fakes (n = {a_cell + b_cell + c_cell + d_cell})\n"
+        f"  a (both right)         = {a_cell}\n"
+        f"  b (RN wrong, TS right) = {b_cell}  <-- shown above\n"
+        f"  c (RN right, TS wrong) = {c_cell}\n"
+        f"  d (both wrong)         = {d_cell}\n"
+        f"figure shows top {len(target_subs)} of b by lowest p_RN(fake)"
+    )
+    fig.text(0.012, 0.012, summary_txt, fontsize=8, family="monospace",
+             ha="left", va="bottom",
+             bbox=dict(facecolor="white", edgecolor="0.6",
+                       boxstyle="round,pad=0.4", alpha=0.95))
+    fig.tight_layout(rect=[0, 0.06, 1, 0.96])
     fig.savefig(OUT / "10_gradcam_resnet_vs_two_stream.png")
     plt.close(fig)
     cam_rn.remove(); cam_ts.remove()
